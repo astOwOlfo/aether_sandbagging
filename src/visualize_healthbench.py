@@ -49,7 +49,8 @@ def _sample_to_dict(sample: Any) -> dict:
         "score": _response_score(sample),
         "achieved_points": achieved,
         "achievable_points": achievable,
-        "response": sample.response,
+        "response": sample.response.completion,
+        "reasoning": sample.response.reasoning,
         "rubric_scores": [
             {
                 "criterion": rs.rubric.criterion,
@@ -736,7 +737,11 @@ function sampleHtml(s, i) {
       `<td>${esc(rs.criterion)}</td>` +
       `<td class="snippet">${rs.explanation === null ? "—" : esc(rs.explanation)}</td></tr>`
     ).join("");
-    body =
+    const cot = s.reasoning === null || s.reasoning === undefined
+      ? ""
+      : `<details><summary>chain of thought</summary><div class="body">` +
+        `<pre class="text">${esc(s.reasoning)}</pre></div></details>`;
+    body = cot +
       `<div class="msg"><span class="role">response</span>` +
       `<pre class="text">${esc(s.response)}</pre></div>` +
       `<table class="grid"><thead><tr><th>met</th><th class="num">points</th>` +

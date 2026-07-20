@@ -206,7 +206,7 @@ class RubricScore:
 
 @dataclass(frozen=True, slots=True)
 class ResponseScore:
-    response: str
+    response: Completion
     rubric_scores: list[RubricScore]
 
 
@@ -313,7 +313,7 @@ async def evaluate_single(
         ]
     )
 
-    return ResponseScore(response=response.completion, rubric_scores=rubric_scores)
+    return ResponseScore(response=response, rubric_scores=rubric_scores)
 
 
 async def evaluate_datapoint(

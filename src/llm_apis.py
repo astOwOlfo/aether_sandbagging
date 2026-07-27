@@ -29,6 +29,7 @@ class Model:
     temperature: float = 1.0
     max_parallel: int = 256
     provider: Literal["openrouter", "vllm"] = "openrouter"
+    vllm_base_url: str = "http://localhost:8000/v1/"
 
 
 class StopReason(Enum):
@@ -51,12 +52,12 @@ class _RetryableResponseError(Exception):
 _clients: dict[str, AsyncOpenAI] = {}
 
 
-def _get_client(model: Model, vllm_base_url: str) -> AsyncOpenAI:
+def _get_client(model: Model) -> AsyncOpenAI:
     if model.provider == "openrouter":
         base_url = "https://openrouter.ai/api/v1"
         api_key = os.environ["OPENROUTER_API_KEY"]
     else:
-        base_url = vllm_base_url
+        base_url = model.vllm_base_url
         # vLLM only checks the key if started with --api-key; the OpenAI client
         # requires some non-empty string, and "EMPTY" is the vLLM convention.
         api_key = os.environ.get("VLLM_API_KEY", "EMPTY")
@@ -103,7 +104,7 @@ def _cache_path(model: Model, messages: list[dict], seed: int) -> Path:
     key = {
         field.name: getattr(model, field.name)
         for field in fields(Model)
-        if field.name != "max_parallel"
+        if field.name not in ("max_parallel", "vllm_base_url")
     }
     key["messages"] = messages
     key["seed"] = seed
@@ -178,9 +179,7 @@ def _parse_response(response: ChatCompletion) -> Completion | StopReason:
     return Completion(completion=content, reasoning=reasoning)
 
 
-async def _call_api_with_retries(
-    model: Model, messages: list[Any], vllm_base_url: str
-) -> ChatCompletion:
+async def _call_api_with_retries(model: Model, messages: list[Any]) -> ChatCompletion:
     delay = _INITIAL_RETRY_DELAY_SECONDS
     # The `reasoning` and `provider` fields are OpenRouter extensions; vLLM controls
     # reasoning server-side (--reasoning-parser) and would reject unknown fields.
@@ -191,7 +190,7 @@ async def _call_api_with_retries(
     )
     while True:
         try:
-            response = await _get_client(model, vllm_base_url).chat.completions.create(
+            response = await _get_client(model).chat.completions.create(
                 model=model.model,
                 messages=messages,
                 max_tokens=model.max_tokens,
@@ -216,15 +215,14 @@ async def generate(
     model: Model,
     prompt: str | list[dict],
     seed: int,
-    vllm_base_url: str = "http://localhost:8080/v1/",
 ) -> Completion | StopReason:
     """Generate a response, with indefinite retries and disk caching.
 
     Calls go to OpenRouter or to an OpenAI-compatible vLLM server at
-    `vllm_base_url`, depending on `model.provider`. With vLLM, `model.thinking` has
-    no effect: reasoning is configured server-side, and any reasoning the server
-    parses out is returned in `Completion.reasoning`. `vllm_base_url` is not part of
-    the cache key.
+    `model.vllm_base_url`, depending on `model.provider`. With vLLM, `model.thinking`
+    has no effect: reasoning is configured server-side, and any reasoning the server
+    parses out is returned in `Completion.reasoning`. `model.vllm_base_url` is not
+    part of the cache key.
 
     `seed` is only part of the cache key (to allow resampling despite caching); it is
     not passed to the API.
@@ -237,7 +235,7 @@ async def generate(
     if cached is not None:
         return _parse_response(ChatCompletion.model_validate_json(cached))
     async with _get_semaphore(model):
-        response = await _call_api_with_retries(model, messages, vllm_base_url)
+        response = await _call_api_with_retries(model, messages)
     result = _parse_response(response)
     await asyncio.to_thread(_write_cache, path, response.model_dump_json())
     return result

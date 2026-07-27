@@ -17,17 +17,23 @@ async def main(prefilter_malicious_refusals: bool) -> None:
     dataset = dataset
 
     models: list[Model] = [
-        Model("anthropic/claude-sonnet-4.6"),
-        Model("deepseek/deepseek-v4-pro"),
+        # Model("huihui-ai/Huihui-gemma-4-31B-it-abliterated-v2", provider="vllm"),
+        # Model("llmfan46/gpt-oss-120b-heretic-v2", provider="vllm"),
+        # Model(
+        #     "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark",
+        #     provider="vllm",
+        # ),
+        # Model("anthropic/claude-sonnet-4.6"),
+        # Model("deepseek/deepseek-v4-pro"),
         Model("google/gemma-4-31b-it"),
-        Model("openai/gpt-oss-120b"),
-        Model("qwen/qwen3.6-35b-a3b"),
+        # Model("openai/gpt-oss-120b"),
+        # Model("qwen/qwen3.6-35b-a3b"),
     ]
 
     resamples: int = 32 if prefilter_malicious_refusals else 4
     datapoints: int | None = 32 if prefilter_malicious_refusals else None
     grader: Model = Model("deepseek/deepseek-v4-flash", max_parallel=1024)
-    refusal_judge = Model("z-ai/glm-5.2")
+    judge = Model("z-ai/glm-5.2")
 
     args: list[tuple[Model, bool]] = [
         (model, strict_refusal_judge)
@@ -43,8 +49,10 @@ async def main(prefilter_malicious_refusals: bool) -> None:
                 resamples=resamples,
                 datapoints=datapoints,
                 grader=grader,
-                refusal_judge=refusal_judge,
+                refusal_judge=judge,
                 strict_refusal_judge=strict_refusal_judge,
+                claim_extractor=judge,
+                claim_correctness_judge=judge,
                 prefilter_malicious_refusals=prefilter_malicious_refusals,
                 seed=42,
             )

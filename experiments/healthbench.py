@@ -29,7 +29,7 @@ async def main(prefilter_malicious_refusals: bool) -> None:
         # Model("qwen/qwen3.6-35b-a3b"),
     ]
 
-    resamples: int = 32 if prefilter_malicious_refusals else 4
+    resamples: int = 32 if prefilter_malicious_refusals else 1
     datapoints: int | None = 32 if prefilter_malicious_refusals else None
     grader: Model = Model("deepseek/deepseek-v4-flash", max_parallel=1024)
     judge = Model("z-ai/glm-5.2")

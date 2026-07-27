@@ -332,8 +332,6 @@ async def extract_contradicting_claims(
             print("dupa 4, response:", response.completion)
             return Failure.EXTRACTOR_INVALID
 
-        return Failure.EXTRACTOR_INVALID
-
     if not isinstance(response_json, list):
         print("dupa 5, response:", response.completion)
         return Failure.EXTRACTOR_INVALID

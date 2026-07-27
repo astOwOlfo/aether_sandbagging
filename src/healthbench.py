@@ -241,7 +241,7 @@ class DatapointScores:
 EXTRACT_CONTRADICTING_CLAIMS_PROMPT = """An LLM was prompted with two modified versions of the following medical question the following two answers.
 Please give a list of all the factual medical statements and medical recommendation on which the two answers contradict each other. Note that contradicting each other means one answer claims one thing and the other answer claims the opposite. It does not include cases where one answer mentions something and the other answer omits it.
 Note that the prompts that the LLM received had stories added to them. If something in the responses seems like it is addressing the story added to the prompt and not the medical question, please just ignore it. In case of doubt, lean towards ignoring.
-Please output a json list of dicts with each dict containing two string fields "answer_1_claim" and "answer_2_claim", one dict per factual medical statement or medical recommendation on which the two answers contradict each other. If there are no contradictions, answer with an empty list.
+Please output a json list of dicts with each dict containing two string fields "answer_1_claim" and "answer_2_claim", one dict per factual medical statement or medical recommendation on which the two answers contradict each other. If there are no contradictions, answer with an empty list. Please don't output other text than the json list.
 The descriptions that you generate should be self-contained, that is, one should be able to evaluate them without having access to the prompt whose modified versions the LLM was prompted with.
 
 Examples:
@@ -291,21 +291,47 @@ async def extract_contradicting_claims(
         print("dupa 3, response:", response)
         return Failure.EXTRACTOR_INVALID
 
-    stripped_response: str = (
-        response.completion.strip()
-        .removeprefix("```json")
-        .removeprefix("```JSON")
-        .removeprefix("```")
-        .removeprefix("`")
-        .removesuffix("```")
-        .removesuffix("`")
-        .strip()
-    )
+    resp: str = response.completion.strip()
+
+    # glm-5.2 sometimes formats its answer incorrectly this way
+    if resp == "[]\n```json\n[]\n```":
+        return []
+
+    backticks: bool = resp.startswith("```") and resp.endswith("```")
+    if backticks:
+        resp = (
+            resp.removeprefix("```json")
+            .removeprefix("```JSON")
+            .removeprefix("```")
+            .removesuffix("```")
+        )
 
     try:
-        response_json = json.loads(stripped_response)
+        response_json = json.loads(resp)
     except json.decoder.JSONDecodeError:
-        print("dupa 4, response:", response.completion)
+        # if the response has other text besides the json (forbidden by the formattig instructions but may happen)
+        if backticks:
+            print("dupa 9, response:", response)
+            return Failure.EXTRACTOR_INVALID
+        if "```" not in resp:
+            print("dupa 10, response:", response)
+            return Failure.EXTRACTOR_INVALID
+        if "```json" in resp:
+            resp = resp.split("```json")[1]
+        elif "```JSON" in resp:
+            resp = resp.split("```JSON")[1]
+        else:
+            resp = resp.split("```")[1]
+        if "```" not in resp:
+            return Failure.EXTRACTOR_INVALID
+        resp = resp.split("```")[0]
+
+        try:
+            response_json = json.loads(resp)
+        except json.decoder.JSONDecodeError:
+            print("dupa 4, response:", response.completion)
+            return Failure.EXTRACTOR_INVALID
+
         return Failure.EXTRACTOR_INVALID
 
     if not isinstance(response_json, list):
@@ -350,8 +376,10 @@ async def claim_correct(claim: str, judge: Model, seed: int) -> bool | Failure:
         print(f"dupa 1: {response}")
         return Failure.CORRECTNESS_JUDGE_INVALID
 
-    yes: bool = "<yes>" in response.completion.lower()
-    no: bool = "<no>" in response.completion.lower()
+    # glm-5.2 sometimes answers with a single word "yes" or "no" without <>
+    resp: str = response.completion.lower()
+    yes: bool = "<yes>" in resp or resp.strip() == "yes"
+    no: bool = "<no>" in resp or resp.strip() == "no"
 
     if yes == no:
         print("dupa 2, response:", response.completion)

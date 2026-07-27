@@ -73,5 +73,4 @@ async def main(prefilter_malicious_refusals: bool) -> None:
 
 
 if __name__ == "__main__":
-    load_dotenv()
     asyncio.run(main(prefilter_malicious_refusals=False))

@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass, fields
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import openai
 from dotenv import load_dotenv
@@ -28,6 +28,7 @@ class Model:
     max_tokens: int = 32768
     temperature: float = 1.0
     max_parallel: int = 256
+    provider: Literal["openrouter", "vllm"] = "openrouter"
 
 
 class StopReason(Enum):
@@ -46,26 +47,32 @@ class _RetryableResponseError(Exception):
     """The API returned a well-formed response that reports a provider failure."""
 
 
-_client: AsyncOpenAI | None = None
+# One client per base URL, so openrouter and vllm (possibly several servers) coexist.
+_clients: dict[str, AsyncOpenAI] = {}
 
 
-def _get_client() -> AsyncOpenAI:
-    global _client
-    if _client is None:
-        _client = AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ["OPENROUTER_API_KEY"],
-        )
-    return _client
+def _get_client(model: Model, vllm_base_url: str) -> AsyncOpenAI:
+    if model.provider == "openrouter":
+        base_url = "https://openrouter.ai/api/v1"
+        api_key = os.environ["OPENROUTER_API_KEY"]
+    else:
+        base_url = vllm_base_url
+        # vLLM only checks the key if started with --api-key; the OpenAI client
+        # requires some non-empty string, and "EMPTY" is the vLLM convention.
+        api_key = os.environ.get("VLLM_API_KEY", "EMPTY")
+    if base_url not in _clients:
+        _clients[base_url] = AsyncOpenAI(base_url=base_url, api_key=api_key)
+    return _clients[base_url]
 
 
-# Semaphores are keyed by (event loop, model name): the cap is per model name, and a
-# semaphore must not be reused across event loops (e.g. successive asyncio.run calls).
-_semaphores: dict[tuple[int, str], asyncio.Semaphore] = {}
+# Semaphores are keyed by (event loop, provider, model name): the cap is per model
+# name within a provider, and a semaphore must not be reused across event loops
+# (e.g. successive asyncio.run calls).
+_semaphores: dict[tuple[int, str, str], asyncio.Semaphore] = {}
 
 
 def _get_semaphore(model: Model) -> asyncio.Semaphore:
-    key = (id(asyncio.get_running_loop()), model.model)
+    key = (id(asyncio.get_running_loop()), model.provider, model.model)
     if key not in _semaphores:
         _semaphores[key] = asyncio.Semaphore(model.max_parallel)
     return _semaphores[key]
@@ -100,6 +107,11 @@ def _cache_path(model: Model, messages: list[dict], seed: int) -> Path:
     }
     key["messages"] = messages
     key["seed"] = seed
+    # Omit the default provider from the key so that cache entries written before the
+    # provider field existed stay valid. The vllm base url is deliberately never part
+    # of the key: the same model served from a different address is the same model.
+    if key["provider"] == "openrouter":
+        del key["provider"]
     digest = hashlib.sha256(
         json.dumps(key, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
@@ -156,6 +168,9 @@ def _parse_response(response: ChatCompletion) -> Completion | StopReason:
             f"finish_reason is 'stop' but content is {content!r}"
         )
     reasoning = getattr(choice.message, "reasoning", None)
+    if reasoning is None:
+        # vLLM (with a --reasoning-parser) reports reasoning as `reasoning_content`.
+        reasoning = getattr(choice.message, "reasoning_content", None)
     if reasoning is not None and not isinstance(reasoning, str):
         raise ValueError(f"reasoning is not a string: {reasoning!r}")
     if reasoning is not None and reasoning.strip() == "":
@@ -163,19 +178,25 @@ def _parse_response(response: ChatCompletion) -> Completion | StopReason:
     return Completion(completion=content, reasoning=reasoning)
 
 
-async def _call_api_with_retries(model: Model, messages: list[Any]) -> ChatCompletion:
+async def _call_api_with_retries(
+    model: Model, messages: list[Any], vllm_base_url: str
+) -> ChatCompletion:
     delay = _INITIAL_RETRY_DELAY_SECONDS
+    # The `reasoning` and `provider` fields are OpenRouter extensions; vLLM controls
+    # reasoning server-side (--reasoning-parser) and would reject unknown fields.
+    extra_body = (
+        {"reasoning": {"enabled": model.thinking}, "provider": {"sort": "price"}}
+        if model.provider == "openrouter"
+        else None
+    )
     while True:
         try:
-            response = await _get_client().chat.completions.create(
+            response = await _get_client(model, vllm_base_url).chat.completions.create(
                 model=model.model,
                 messages=messages,
                 max_tokens=model.max_tokens,
                 temperature=model.temperature,
-                extra_body={
-                    "reasoning": {"enabled": model.thinking},
-                    "provider": {"sort": "price"},
-                },
+                extra_body=extra_body,
             )
             _count_tokens(response)
             # Raises _RetryableResponseError on provider failures reported inside the
@@ -192,9 +213,18 @@ async def _call_api_with_retries(model: Model, messages: list[Any]) -> ChatCompl
 
 
 async def generate(
-    model: Model, prompt: str | list[dict], seed: int
+    model: Model,
+    prompt: str | list[dict],
+    seed: int,
+    vllm_base_url: str = "http://localhost:8080/v1/",
 ) -> Completion | StopReason:
-    """Generate a response via OpenRouter, with indefinite retries and disk caching.
+    """Generate a response, with indefinite retries and disk caching.
+
+    Calls go to OpenRouter or to an OpenAI-compatible vLLM server at
+    `vllm_base_url`, depending on `model.provider`. With vLLM, `model.thinking` has
+    no effect: reasoning is configured server-side, and any reasoning the server
+    parses out is returned in `Completion.reasoning`. `vllm_base_url` is not part of
+    the cache key.
 
     `seed` is only part of the cache key (to allow resampling despite caching); it is
     not passed to the API.
@@ -207,7 +237,7 @@ async def generate(
     if cached is not None:
         return _parse_response(ChatCompletion.model_validate_json(cached))
     async with _get_semaphore(model):
-        response = await _call_api_with_retries(model, messages)
+        response = await _call_api_with_retries(model, messages, vllm_base_url)
     result = _parse_response(response)
     await asyncio.to_thread(_write_cache, path, response.model_dump_json())
     return result

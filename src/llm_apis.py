@@ -79,6 +79,14 @@ def _get_semaphore(model: Model) -> asyncio.Semaphore:
     return _semaphores[key]
 
 
+# In-flight requests keyed by (event loop, cache path): concurrent calls with the
+# same cache key share one API call. Without this they would race on the cache file
+# (last write wins), so on a rerun the losing call would return a value it never saw.
+# Keyed by loop id for the same reason as _semaphores. The future holds the response
+# JSON exactly as written to the cache.
+_inflight: dict[tuple[int, Path], "asyncio.Future[str]"] = {}
+
+
 _total_input_tokens = 0
 _total_output_tokens = 0
 
@@ -231,11 +239,37 @@ async def generate(
         [{"role": "user", "content": prompt}] if isinstance(prompt, str) else prompt
     )
     path = _cache_path(model, messages, seed)
-    cached = await asyncio.to_thread(_read_cache, path)
-    if cached is not None:
-        return _parse_response(ChatCompletion.model_validate_json(cached))
-    async with _get_semaphore(model):
-        response = await _call_api_with_retries(model, messages)
-    result = _parse_response(response)
-    await asyncio.to_thread(_write_cache, path, response.model_dump_json())
+    key = (id(asyncio.get_running_loop()), path)
+    inflight = _inflight.get(key)
+    if inflight is None:
+        cached = await asyncio.to_thread(_read_cache, path)
+        if cached is not None:
+            return _parse_response(ChatCompletion.model_validate_json(cached))
+        # The cache read yielded to the event loop, so an identical call may have
+        # registered itself in the meantime; nothing yields between this re-check
+        # and our own registration below.
+        inflight = _inflight.get(key)
+    if inflight is not None:
+        # shield: cancelling one waiter must not cancel the shared future.
+        return _parse_response(
+            ChatCompletion.model_validate_json(await asyncio.shield(inflight))
+        )
+    future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+    _inflight[key] = future
+    try:
+        async with _get_semaphore(model):
+            response = await _call_api_with_retries(model, messages)
+        result = _parse_response(response)
+        data = response.model_dump_json()
+        await asyncio.to_thread(_write_cache, path, data)
+    except BaseException as e:
+        future.set_exception(e)
+        future.exception()  # mark retrieved, so no-waiter failures don't log a warning
+        raise
+    finally:
+        # On success this runs after the cache write, so late duplicates that miss
+        # the registry are guaranteed to hit the cache instead of calling the API
+        # again; on failure it lets them retry from scratch.
+        del _inflight[key]
+    future.set_result(data)
     return result

@@ -841,6 +841,11 @@ def summarize(all_scores: list[DatapointScores]) -> ScoreSummary:
         for datapoint_scores in valid_scores
     )
 
+    # assert not any(
+    #     datapoint_scores.contradicting_claims is None
+    #     for datapoint_scores in valid_scores
+    # )
+
     scores_with_valid_claims: list[DatapointScores] = [
         datapoint_scores
         for datapoint_scores in valid_scores

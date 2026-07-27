@@ -22,16 +22,16 @@ async def main(prefilter_malicious_refusals: bool) -> None:
         #     "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark",
         #     provider="vllm",
         # ),
-        # Model("anthropic/claude-sonnet-4.6"),
-        # Model("deepseek/deepseek-v4-pro"),
+        Model("anthropic/claude-sonnet-4.6"),
+        Model("deepseek/deepseek-v4-pro"),
         Model("google/gemma-4-31b-it"),
-        # Model("openai/gpt-oss-120b"),
-        # Model("qwen/qwen3.6-35b-a3b"),
+        Model("openai/gpt-oss-120b"),
+        Model("qwen/qwen3.6-35b-a3b"),
     ]
 
     resamples: int = 32 if prefilter_malicious_refusals else 1
     datapoints: int | None = 32 if prefilter_malicious_refusals else None
-    grader: Model = Model("deepseek/deepseek-v4-flash", max_parallel=1024)
+    grader: Model = Model("deepseek/deepseek-v4-flash", max_parallel=256)
     judge = Model("z-ai/glm-5.2")
 
     args: list[tuple[Model, bool]] = [

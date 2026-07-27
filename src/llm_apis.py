@@ -27,7 +27,7 @@ class Model:
     thinking: bool = True
     max_tokens: int = 32768
     temperature: float = 1.0
-    max_parallel: int = 256
+    max_parallel: int = 64
     provider: Literal["openrouter", "vllm"] = "openrouter"
     vllm_base_url: str = "http://localhost:8000/v1/"
 

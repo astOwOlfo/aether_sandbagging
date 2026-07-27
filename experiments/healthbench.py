@@ -1,4 +1,3 @@
-from dotenv import load_dotenv
 import asyncio
 
 from src.healthbench import (

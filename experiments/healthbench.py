@@ -12,22 +12,21 @@ from src.llm_apis import Model
 from src.visualize_healthbench import visualize
 
 
-async def main() -> None:
+async def main(prefilter_malicious_refusals: bool) -> None:
     dataset: list[Datapoint] = load_healthbench_data()
-    dataset = dataset[:16]
+    dataset = dataset
 
     models: list[Model] = [
         Model("anthropic/claude-sonnet-4.6"),
-        # Model("deepseek/deepseek-v4-pro"),
+        Model("deepseek/deepseek-v4-pro"),
         Model("google/gemma-4-31b-it"),
-        # Model("openai/gpt-oss-120b"),
-        # Model("qwen/qwen3.6-35b-a3b"),
+        Model("openai/gpt-oss-120b"),
+        Model("qwen/qwen3.6-35b-a3b"),
     ]
 
-    prefilter_malicious_refusals: bool = False
     resamples: int = 32 if prefilter_malicious_refusals else 4
     datapoints: int | None = 32 if prefilter_malicious_refusals else None
-    grader: Model = Model("deepseek/deepseek-v4-flash")
+    grader: Model = Model("deepseek/deepseek-v4-flash", max_parallel=1024)
     refusal_judge = Model("z-ai/glm-5.2")
 
     args: list[tuple[Model, bool]] = [
@@ -67,6 +66,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     load_dotenv()
-    asyncio.run(main())
-
-# $0.0137
+    asyncio.run(main(prefilter_malicious_refusals=False))

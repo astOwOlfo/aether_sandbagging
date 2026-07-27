@@ -27,7 +27,7 @@ class Model:
     thinking: bool = True
     max_tokens: int = 32768
     temperature: float = 1.0
-    max_parallel: int = 1024
+    max_parallel: int = 256
 
 
 class StopReason(Enum):
@@ -136,6 +136,11 @@ def _parse_response(response: ChatCompletion) -> Completion | StopReason:
     choice_error = getattr(choice, "error", None)
     if choice_error is not None or choice.finish_reason == "error":
         raise _RetryableResponseError(f"error in response choice: {choice!r}")
+    if choice.finish_reason is None:
+        print("[debug] response with finish reason None:", response)
+        raise _RetryableResponseError(
+            f"finish reason is None in response choice: {choice}"
+        )
     if choice.finish_reason != "stop":
         try:
             return StopReason(choice.finish_reason)
@@ -145,8 +150,11 @@ def _parse_response(response: ChatCompletion) -> Completion | StopReason:
             ) from None
     content = choice.message.content
     if not isinstance(content, str) or content == "":
-        print("[debug] bad response:", response)
-        raise ValueError(f"finish_reason is 'stop' but content is {content!r}")
+        print("[debug] response with empty content:", response)
+        # raise ValueError(f"finish_reason is 'stop' but content is {content!r}")
+        raise _RetryableResponseError(
+            f"finish_reason is 'stop' but content is {content!r}"
+        )
     reasoning = getattr(choice.message, "reasoning", None)
     if reasoning is not None and not isinstance(reasoning, str):
         raise ValueError(f"reasoning is not a string: {reasoning!r}")

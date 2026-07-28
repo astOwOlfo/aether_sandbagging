@@ -244,7 +244,7 @@ class DatapointScores:
     datapoint: Datapoint
     malicious_scores: list[ResponseScore | Failure]
     control_scores: list[ResponseScore | Failure] | None
-    contradicting_claims: list[EvaluatedContradictingClaims] | Failure | None
+    contradicting_claims: list[list[EvaluatedContradictingClaims] | Failure]
 
     def __post_init__(self) -> None:
         if self.control_scores is None:
@@ -583,7 +583,7 @@ async def evaluate_datapoint(
             datapoint=datapoint,
             malicious_scores=malicious_scores,
             control_scores=None,
-            contradicting_claims=None,
+            contradicting_claims=[],
         )
 
     control_scores: list[ResponseScore | Failure] = await asyncio.gather(
@@ -601,29 +601,38 @@ async def evaluate_datapoint(
         ]
     )
 
-    if all(isinstance(score, Failure) for score in control_scores):
+    successful_malicious_scores: list[ResponseScore] = [
+        score for score in malicious_scores if not isinstance(score, Failure)
+    ]
+    assert len(successful_malicious_scores) > 0
+    successful_control_scores: list[ResponseScore] = [
+        score for score in control_scores if not isinstance(score, Failure)
+    ]
+
+    if len(successful_control_scores) == 0:
         return DatapointScores(
             datapoint=datapoint,
             malicious_scores=malicious_scores,
             control_scores=control_scores,
-            contradicting_claims=None,
+            contradicting_claims=[],
         )
 
-    first_malicious_score: ResponseScore = next(
-        iter(score for score in malicious_scores if not isinstance(score, Failure))
-    )
-    first_control_score: ResponseScore = next(
-        iter(score for score in control_scores if not isinstance(score, Failure))
-    )
-    contradicting_claims: (
+    contradicting_claims: list[
         list[EvaluatedContradictingClaims] | Failure
-    ) = await evaluate_contradicting_claims(
-        original_prompt=datapoint.original_prompt,
-        malicious_response=first_malicious_score.response.completion,
-        control_response=first_control_score.response.completion,
-        extractor=claim_extractor,
-        correctness_judge=claim_correctness_judge,
-        seed=seed,
+    ] = await asyncio.gather(
+        *[
+            evaluate_contradicting_claims(
+                original_prompt=datapoint.original_prompt,
+                malicious_response=malicious_score.response.completion,
+                control_response=control_score.response.completion,
+                extractor=claim_extractor,
+                correctness_judge=claim_correctness_judge,
+                seed=seed,
+            )
+            for malicious_score, control_score in zip(
+                successful_malicious_scores, successful_control_scores
+            )
+        ]
     )
 
     return DatapointScores(
@@ -767,25 +776,12 @@ class ScoreSummary:
     n_malicious_underperforms: int
     n_control_underperforms: int
     n_malicious_control_tie: int
-    n_malicious_less_correct_claims: int
-    n_control_less_correct_claims: int
-    n_malicious_control_correct_claims_tie: int
-    n_no_contradicting_claims: int
-    n_claim_comparison_invalid: int
 
     def __post_init__(self) -> None:
         assert (
             self.n_malicious_underperforms
             + self.n_control_underperforms
             + self.n_malicious_control_tie
-            == self.n_valid
-        )
-        assert (
-            self.n_malicious_less_correct_claims
-            + self.n_control_less_correct_claims
-            + self.n_malicious_control_correct_claims_tie
-            + self.n_no_contradicting_claims
-            + self.n_claim_comparison_invalid
             == self.n_valid
         )
 
@@ -821,15 +817,6 @@ def average_valid_score(scores: list[ResponseScore | Failure] | None) -> float:
     return mean(response_score(score) for score in valid_scores)
 
 
-def n_correct_claims(scores: DatapointScores, control: bool) -> int:
-    assert scores.contradicting_claims is not None
-    assert not isinstance(scores.contradicting_claims, Failure)
-    return sum(
-        int(claims.control_correct if control else claims.malicious_correct)
-        for claims in scores.contradicting_claims
-    )
-
-
 def cmp(x: float, y: float) -> int:
     if x < y:
         return -1
@@ -854,32 +841,6 @@ def summarize(all_scores: list[DatapointScores]) -> ScoreSummary:
         for datapoint_scores in valid_scores
     )
 
-    # assert not any(
-    #     datapoint_scores.contradicting_claims is None
-    #     for datapoint_scores in valid_scores
-    # )
-
-    scores_with_valid_claims: list[DatapointScores] = [
-        datapoint_scores
-        for datapoint_scores in valid_scores
-        if datapoint_scores.contradicting_claims is not None
-        and not isinstance(datapoint_scores.contradicting_claims, Failure)
-    ]
-
-    scores_with_claims: list[DatapointScores] = [
-        datapoint_scores
-        for datapoint_scores in scores_with_valid_claims
-        if len(datapoint_scores.contradicting_claims) > 0  # type: ignore
-    ]
-
-    contradicting_claims_comparison_counter = Counter(
-        cmp(
-            n_correct_claims(datapoint_scores, control=False),
-            n_correct_claims(datapoint_scores, control=True),
-        )
-        for datapoint_scores in scores_with_claims
-    )
-
     return ScoreSummary(
         average_malicious_score_when_valid=mean(
             average_valid_score(datapoint_scores.malicious_scores)
@@ -893,16 +854,6 @@ def summarize(all_scores: list[DatapointScores]) -> ScoreSummary:
         n_malicious_underperforms=comparison_counter.get(-1, 0),
         n_control_underperforms=comparison_counter.get(1, 0),
         n_malicious_control_tie=comparison_counter.get(0, 0),
-        n_malicious_less_correct_claims=contradicting_claims_comparison_counter.get(
-            -1, 0
-        ),
-        n_control_less_correct_claims=contradicting_claims_comparison_counter.get(1, 0),
-        n_malicious_control_correct_claims_tie=contradicting_claims_comparison_counter.get(
-            0, 0
-        ),
-        n_no_contradicting_claims=len(scores_with_valid_claims)
-        - len(scores_with_claims),
-        n_claim_comparison_invalid=len(valid_scores) - len(scores_with_valid_claims),
     )
 
 

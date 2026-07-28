@@ -210,7 +210,11 @@ async def _call_api_with_retries(model: Model, messages: list[Any]) -> ChatCompl
             # response body; assumption violations (ValueError) propagate immediately.
             _parse_response(response)
             return response
-        except (openai.APIError, _RetryableResponseError) as e:
+        except (
+            openai.APIError,
+            _RetryableResponseError,
+            json.decoder.JSONDecodeError,
+        ) as e:
             print(
                 f"[llm_apis] API call to {model.model} failed "
                 f"({type(e).__name__}: {e}), retrying in {delay:.0f}s"

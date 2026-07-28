@@ -16,11 +16,20 @@ async def main(prefilter_malicious_refusals: bool) -> None:
     dataset = dataset
 
     models: list[Model] = [
-        # Model("huihui-ai/Huihui-gemma-4-31B-it-abliterated-v2", provider="vllm"),
-        # Model("llmfan46/gpt-oss-120b-heretic-v2", provider="vllm"),
+        # Model(
+        #     "huihui-ai/Huihui-gemma-4-31B-it-abliterated-v2",
+        #     provider="vllm",
+        #     max_parallel=256,
+        # ),
+        # Model(
+        #     "llmfan46/gpt-oss-120b-heretic-v2",
+        #     provider="vllm",
+        #     max_parallel=256,
+        # ),
         # Model(
         #     "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark",
         #     provider="vllm",
+        #     max_parallel=256,
         # ),
         Model("anthropic/claude-sonnet-4.6"),
         Model("deepseek/deepseek-v4-pro"),
@@ -29,7 +38,7 @@ async def main(prefilter_malicious_refusals: bool) -> None:
         Model("qwen/qwen3.6-35b-a3b"),
     ]
 
-    resamples: int = 32 if prefilter_malicious_refusals else 1
+    resamples: int = 32 if prefilter_malicious_refusals else 4
     datapoints: int | None = 32 if prefilter_malicious_refusals else None
     grader: Model = Model("deepseek/deepseek-v4-flash", max_parallel=256)
     judge = Model("z-ai/glm-5.2")

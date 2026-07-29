@@ -653,6 +653,7 @@ async def evaluate(
     claim_extractor: Model,
     claim_correctness_judge: Model,
     seed: int,
+    tqdm_description: str,
 ) -> list[DatapointScores]:
     return await tqdm_asyncio.gather(
         *[
@@ -669,7 +670,7 @@ async def evaluate(
             )
             for datapoint in dataset
         ],
-        desc="evaluating",
+        desc=tqdm_description,
     )
 
 
@@ -694,7 +695,7 @@ async def evaluate_original_prompts(
             )
             for datapoint in dataset
         ],
-        desc="evaluating",
+        desc="evaluating original prompts",
     )
 
 
@@ -740,7 +741,7 @@ async def evaluate_refusal(
     assert False, "unreachable"
 
 
-async def filter_malicious_refusals(
+async def filter_malicious_compliances(
     dataset: list[Datapoint],
     model: Model,
     refusal_judge: Model,
@@ -764,7 +765,7 @@ async def filter_malicious_refusals(
     return [
         datapoint
         for datapoint, is_refusal in zip(dataset, refusal_classifications, strict=True)
-        if not is_refusal
+        if is_refusal
     ]
 
 
@@ -920,11 +921,12 @@ async def run_experiment(
     strict_refusal_judge: bool,
     claim_extractor: Model,
     claim_correctness_judge: Model,
-    prefilter_malicious_refusals: bool,
+    prefilter_malicious_compliances: bool,
     seed: int,
+    tqdm_description: str = "running experiment",
 ) -> ExperimentResult:
-    if prefilter_malicious_refusals:
-        dataset = await filter_malicious_refusals(
+    if prefilter_malicious_compliances:
+        dataset = await filter_malicious_compliances(
             dataset=dataset,
             model=model,
             refusal_judge=refusal_judge,
@@ -953,6 +955,7 @@ async def run_experiment(
         claim_extractor=claim_extractor,
         claim_correctness_judge=claim_correctness_judge,
         seed=seed,
+        tqdm_description=tqdm_description,
     )
 
     return ExperimentResult(

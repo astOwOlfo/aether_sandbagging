@@ -2,5 +2,6 @@
 .venv/
 .cache/
 .cache.old/
+.cache.backup/
 *.pyc
 __pycache__/

@@ -289,6 +289,7 @@ async def extract_contradicting_claims(
     if not isinstance(original_prompt, str):
         original_prompt = conversation_to_str(original_prompt)
 
+    # randomize the order of the responses in the prompt in case the judge has position bias
     swap: bool = stable_hash([malicious_response, control_response, seed]) % 2 == 1
 
     extractor_prompt = EXTRACT_CONTRADICTING_CLAIMS_PROMPT.format(

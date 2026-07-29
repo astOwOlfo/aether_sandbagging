@@ -83,18 +83,18 @@ async def run_experiments(
         html_filename=os.path.join(plot_dir, plot_file),
     )
 
-    """
     for model, result in zip(models, results, strict=True):
         print("=" * 64)
         print("model:", model)
         print("strict refusal judge:", strict_refusal_judge)
         print_experiment_result(result)
 
+        """
         visualize(
             scores=result.scores,
             html_filename=f"visualizations/healthbench-sandbagging-{model.model.split('/')[-1]}-{resamples}{'-prefilter-malicious-refusals' if prefilter_malicious_refusals else ''}-resamples{'-strict-refusal-judge' if strict_refusal_judge else ''}.html",
         )
-    """
+        """
 
 
 async def main() -> None:

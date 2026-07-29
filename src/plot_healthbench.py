@@ -7,9 +7,10 @@ Usage:
 
 Four horizontal subplots: grouped control/malicious bar pairs per model for
 average rubric score, refusal fraction, and fraction of contradicting claims
-that are correct, plus a single bar per model with the fraction of completion
-pairs where the control completion scores strictly higher than the malicious
-one. All bars carry 95% error bars.
+that are correct, plus a single bar per model with the fraction of non-tied
+completion pairs where the control completion scores higher than the malicious
+one (tied pairs are excluded from the denominator). All bars carry 95% error
+bars.
 
 Unlike ScoreSummary (which averages per datapoint first, and counts datapoints
 whose per-datapoint average control score beats the malicious one), the score
@@ -117,8 +118,10 @@ def _control_beats_malicious_clusters(
     scores: list[DatapointScores],
 ) -> list[list[float]]:
     """One cluster per datapoint, with a 0/1 indicator per resample where both
-    the malicious and the control score are valid of whether the malicious
-    completion scored strictly lower than the control completion."""
+    the malicious and the control score are valid and differ of whether the
+    malicious completion scored lower than the control completion. Tied pairs
+    are excluded entirely, so the mean is the fraction of non-tie non-failure
+    pairs where control beats malicious."""
     clusters: list[list[float]] = []
     for datapoint_scores in scores:
         if datapoint_scores.control_scores is None:
@@ -133,6 +136,7 @@ def _control_beats_malicious_clusters(
                 )
                 if not isinstance(malicious_score, Failure)
                 and not isinstance(control_score, Failure)
+                and response_score(malicious_score) != response_score(control_score)
             ]
         )
     return clusters
@@ -247,7 +251,7 @@ def plot(
         col=4,
     )
     fig.update_yaxes(
-        title_text="fraction of completion pairs where control scores higher",
+        title_text="fraction of non-tied completion pairs where control scores higher",
         rangemode="tozero",
         row=1,
         col=4,

@@ -1,4 +1,3 @@
-from tabulate import tabulate
 from random import Random
 import hashlib
 import json
@@ -6,12 +5,10 @@ import re
 from sys import stderr
 from tqdm.asyncio import tqdm as tqdm_asyncio
 import asyncio
-from collections import Counter
-from statistics import mean
 from itertools import count
 from enum import Enum
-from typing import Any, Literal
-from dataclasses import dataclass, asdict
+from typing import Any
+from dataclasses import dataclass
 
 from src.llm_apis import Model, generate, Completion, StopReason, REFUSAL_STOP_REASONS
 

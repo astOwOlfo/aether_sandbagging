@@ -368,7 +368,7 @@ async def judge_response(
         ),
         n_claims=n_paper_claims + n_paperless_claims,
         n_paperless_claims=n_paper_claims,
-        n_paper_claims=n_paper_claims,
+        n_paper_claims=n_paperless_claims,
         n_existing_paper_claims=len(existing_papers_support_claims),
         n_unsupported_paper_claims=existing_papers_support_claims.count(True),
         n_supported_paper_claims=existing_papers_support_claims.count(False),

@@ -5,12 +5,12 @@ Usage:
     fig = plot(models, results)
     fig.write_html("visualizations/comparison.html")
 
-Four horizontal subplots: grouped control/malicious bar pairs per model for
-average rubric score, refusal fraction, and fraction of contradicting claims
-that are correct, plus a single bar per model with the fraction of non-tied
+Four horizontal subplots: a single bar per model with the fraction of non-tied
 completion pairs where the control completion scores higher than the malicious
-one (tied pairs are excluded from the denominator). All bars carry 95% error
-bars.
+one (tied pairs are excluded from the denominator), followed by grouped
+control/malicious bar pairs per model for average rubric score, refusal
+fraction, and fraction of contradicting claims that are correct. All bars
+carry 95% error bars and all y axes span [0, 1].
 
 Unlike ScoreSummary (which averages per datapoint first, and counts datapoints
 whose per-datapoint average control score beats the malicious one), the score
@@ -186,46 +186,12 @@ def plot(
     fig = make_subplots(
         rows=1,
         cols=4,
-        subplot_titles=[title for title, _, _ in subplots]
-        + ["Control beats malicious"],
+        subplot_titles=["Control beats malicious"]
+        + [title for title, _, _ in subplots],
     )
 
-    for col, (_, y_title, cluster_fn) in enumerate(subplots, start=1):
-        for malicious, name, color in [
-            (False, "control", _CONTROL_COLOR),
-            (True, "malicious", _MALICIOUS_COLOR),
-        ]:
-            means: list[float] = []
-            ci95s: list[float] = []
-            for result in results:
-                mean, ci95 = _cluster_mean_and_ci95(
-                    cluster_fn(result.scores, malicious)
-                )
-                means.append(mean)
-                ci95s.append(ci95)
-            fig.add_trace(
-                go.Bar(
-                    x=labels,
-                    y=means,
-                    name=name,
-                    marker_color=color,
-                    error_y={
-                        "type": "data",
-                        "array": ci95s,
-                        "color": "#52514e",
-                        "thickness": 1.5,
-                        "width": 4,
-                    },
-                    legendgroup=name,
-                    showlegend=col == 1,
-                ),
-                row=1,
-                col=col,
-            )
-        fig.update_yaxes(title_text=y_title, rangemode="tozero", row=1, col=col)
-
-    means = []
-    ci95s = []
+    means: list[float] = []
+    ci95s: list[float] = []
     for result in results:
         mean, ci95 = _cluster_mean_and_ci95(
             _control_beats_malicious_clusters(result.scores)
@@ -248,14 +214,51 @@ def plot(
             showlegend=False,
         ),
         row=1,
-        col=4,
+        col=1,
     )
     fig.update_yaxes(
         title_text="fraction of non-tied completion pairs where control scores higher",
-        rangemode="tozero",
         row=1,
-        col=4,
+        col=1,
     )
+    # y = 0.5 is the no-directional-difference baseline for the win fraction
+    fig.add_hline(
+        y=0.5, line_dash="dash", line_color="#898781", line_width=1, row=1, col=1
+    )
+
+    for col, (_, y_title, cluster_fn) in enumerate(subplots, start=2):
+        for malicious, name, color in [
+            (False, "control", _CONTROL_COLOR),
+            (True, "malicious", _MALICIOUS_COLOR),
+        ]:
+            means = []
+            ci95s = []
+            for result in results:
+                mean, ci95 = _cluster_mean_and_ci95(
+                    cluster_fn(result.scores, malicious)
+                )
+                means.append(mean)
+                ci95s.append(ci95)
+            fig.add_trace(
+                go.Bar(
+                    x=labels,
+                    y=means,
+                    name=name,
+                    marker_color=color,
+                    error_y={
+                        "type": "data",
+                        "array": ci95s,
+                        "color": "#52514e",
+                        "thickness": 1.5,
+                        "width": 4,
+                    },
+                    legendgroup=name,
+                    showlegend=col == 2,
+                ),
+                row=1,
+                col=col,
+            )
+        fig.update_yaxes(title_text=y_title, row=1, col=col)
 
     fig.update_layout(
         barmode="group",
@@ -278,7 +281,7 @@ def plot(
         height=500,
         margin={"t": 90},
     )
-    fig.update_yaxes(gridcolor="#e1e0d9", zerolinecolor="#c3c2b7")
+    fig.update_yaxes(range=[0, 1], gridcolor="#e1e0d9", zerolinecolor="#c3c2b7")
     fig.update_xaxes(showgrid=False, linecolor="#c3c2b7")
 
     if html_filename is not None:

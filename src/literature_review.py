@@ -418,14 +418,49 @@ async def evaluate_single(
 
 
 @dataclass(frozen=True, slots=True)
-class EvaluatedDatapoint:
-    evaluated_malicious_responses: list[EvaluatedResponse | Refusal | Failure]
-    evaluated_control_responses: list[EvaluatedResponse | Refusal | Failure]
+class EvaluatedResponsePair:
+    malicious: EvaluatedResponse | Refusal | Failure
+    control: EvaluatedResponse | Refusal | Failure | None
 
-    def __post_init__(self) -> None:
-        assert len(self.evaluated_malicious_responses) == len(
-            self.evaluated_control_responses
-        )
+
+async def evaluate_pair(
+    datapoint: Datapoint,
+    model: Model,
+    extractor: Model,
+    judge: Model,
+    refusal_judge: Model,
+    strict_refusal_judge: bool,
+    seed: int,
+) -> EvaluatedResponsePair:
+    malicious: EvaluatedResponse | Refusal | Failure = await evaluate_single(
+        prompt=datapoint.malicious_prompt,
+        model=model,
+        extractor=extractor,
+        judge=judge,
+        refusal_judge=refusal_judge,
+        strict_refusal_judge=strict_refusal_judge,
+        seed=seed,
+    )
+
+    if not isinstance(malicious, EvaluatedResponse):
+        return EvaluatedResponsePair(malicious=malicious, control=None)
+
+    control: EvaluatedResponse | Refusal | Failure = await evaluate_single(
+        prompt=datapoint.control_prompt,
+        model=model,
+        extractor=extractor,
+        judge=judge,
+        refusal_judge=refusal_judge,
+        strict_refusal_judge=strict_refusal_judge,
+        seed=seed,
+    )
+
+    return EvaluatedResponsePair(malicious=malicious, control=control)
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluatedDatapoint:
+    evaluated_response_pairs: list[EvaluatedResponsePair]
 
 
 async def evaluate_datapoint(
@@ -438,12 +473,10 @@ async def evaluate_datapoint(
     strict_refusal_judge: bool,
     seed: int,
 ) -> EvaluatedDatapoint:
-    evaluated_responses: list[
-        EvaluatedResponse | Refusal | Failure
-    ] = await asyncio.gather(
+    evaluated_response_pairs: list[EvaluatedResponsePair] = await asyncio.gather(
         *[
-            evaluate_single(
-                prompt=prompt,
+            evaluate_pair(
+                datapoint=datapoint,
                 model=model,
                 extractor=extractor,
                 judge=judge,
@@ -451,15 +484,11 @@ async def evaluate_datapoint(
                 strict_refusal_judge=strict_refusal_judge,
                 seed=stable_hash([seed, resample]),
             )
-            for prompt in [datapoint.malicious_prompt, datapoint.control_prompt]
             for resample in range(resamples)
         ]
     )
 
-    return EvaluatedDatapoint(
-        evaluated_malicious_responses=evaluated_responses[:resamples],
-        evaluated_control_responses=evaluated_responses[resamples:],
-    )
+    return EvaluatedDatapoint(evaluated_response_pairs=evaluated_response_pairs)
 
 
 @dataclass(frozen=True, slots=True)

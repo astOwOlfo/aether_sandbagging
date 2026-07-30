@@ -467,6 +467,11 @@ async def evaluate_datapoint(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ExperimentResult:
+    evaluated_datapoints: list[EvaluatedDatapoint]
+
+
 async def run_experiment(
     dataset: list[Datapoint],
     resamples: int,
@@ -477,8 +482,8 @@ async def run_experiment(
     strict_refusal_judge: bool,
     seed: int,
     tqdm_description: str = "running experiment",
-) -> list[EvaluatedDatapoint]:
-    return await tqdm_asyncio.gather(
+) -> ExperimentResult:
+    evaluated_datapoints: list[EvaluatedDatapoint] = await tqdm_asyncio.gather(
         *[
             evaluate_datapoint(
                 datapoint=datapoint,
@@ -494,3 +499,5 @@ async def run_experiment(
         ],
         desc=tqdm_description,
     )
+
+    return ExperimentResult(evaluated_datapoints=evaluated_datapoints)

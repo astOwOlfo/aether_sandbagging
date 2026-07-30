@@ -218,12 +218,13 @@ def plot(
     )
     fig.update_yaxes(
         title_text="fraction of non-tied completion pairs where control scores higher",
+        tickvals=[0, 0.2, 0.4, 0.5, 0.6, 0.8, 1],
         row=1,
         col=1,
     )
     # y = 0.5 is the no-directional-difference baseline for the win fraction
     fig.add_hline(
-        y=0.5, line_dash="dash", line_color="#898781", line_width=1, row=1, col=1
+        y=0.5, line_dash="dash", line_color="#52514e", line_width=2, row=1, col=1
     )
 
     for col, (_, y_title, cluster_fn) in enumerate(subplots, start=2):

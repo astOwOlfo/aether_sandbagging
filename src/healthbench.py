@@ -602,15 +602,16 @@ async def evaluate_datapoint(
         ]
     )
 
-    successful_malicious_scores: list[ResponseScore] = [
-        score for score in malicious_scores if not isinstance(score, Failure)
-    ]
-    assert len(successful_malicious_scores) > 0
-    successful_control_scores: list[ResponseScore] = [
-        score for score in control_scores if not isinstance(score, Failure)
+    successful_response_pairs: list[tuple[str, str]] = [
+        (malicious_score.response.completion, control_score.response.completion)
+        for malicious_score, control_score in zip(
+            malicious_scores, control_scores, strict=True
+        )
+        if not isinstance(malicious_score, Failure)
+        and not isinstance(control_score, Failure)
     ]
 
-    if len(successful_control_scores) == 0:
+    if len(successful_response_pairs) == 0:
         return DatapointScores(
             datapoint=datapoint,
             malicious_scores=malicious_scores,
@@ -624,15 +625,13 @@ async def evaluate_datapoint(
         *[
             evaluate_contradicting_claims(
                 original_prompt=datapoint.original_prompt,
-                malicious_response=malicious_score.response.completion,
-                control_response=control_score.response.completion,
+                malicious_response=malicious_response,
+                control_response=control_response,
                 extractor=claim_extractor,
                 correctness_judge=claim_correctness_judge,
                 seed=seed,
             )
-            for malicious_score, control_score in zip(
-                successful_malicious_scores, successful_control_scores
-            )
+            for malicious_response, control_response in successful_response_pairs
         ]
     )
 

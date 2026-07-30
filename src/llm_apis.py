@@ -30,6 +30,14 @@ class Model:
     max_parallel: int = 64
     provider: Literal["openrouter", "vllm"] = "openrouter"
     vllm_base_url: str = "http://localhost:8000/v1/"
+    web_search: bool = False
+
+    def __post_init__(self) -> None:
+        if self.web_search and self.provider != "openrouter":
+            raise ValueError(
+                f"web_search is only supported with the openrouter provider, "
+                f"not {self.provider!r}"
+            )
 
 
 class StopReason(Enum):
@@ -116,11 +124,14 @@ def _cache_path(model: Model, messages: list[dict], seed: int) -> Path:
     }
     key["messages"] = messages
     key["seed"] = seed
-    # Omit the default provider from the key so that cache entries written before the
-    # provider field existed stay valid. The vllm base url is deliberately never part
-    # of the key: the same model served from a different address is the same model.
+    # Omit the default provider and web_search from the key so that cache entries
+    # written before these fields existed stay valid. The vllm base url is
+    # deliberately never part of the key: the same model served from a different
+    # address is the same model.
     if key["provider"] == "openrouter":
         del key["provider"]
+    if not key["web_search"]:
+        del key["web_search"]
     digest = hashlib.sha256(
         json.dumps(key, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
@@ -191,11 +202,14 @@ async def _call_api_with_retries(model: Model, messages: list[Any]) -> ChatCompl
     delay = _INITIAL_RETRY_DELAY_SECONDS
     # The `reasoning` and `provider` fields are OpenRouter extensions; vLLM controls
     # reasoning server-side (--reasoning-parser) and would reject unknown fields.
-    extra_body = (
-        {"reasoning": {"enabled": model.thinking}, "provider": {"sort": "price"}}
-        if model.provider == "openrouter"
-        else None
-    )
+    extra_body: dict[str, Any] | None = None
+    if model.provider == "openrouter":
+        extra_body = {
+            "reasoning": {"enabled": model.thinking},
+            "provider": {"sort": "price"},
+        }
+        if model.web_search:
+            extra_body["plugins"] = [{"id": "web"}]
     while True:
         try:
             response = await _get_client(model).chat.completions.create(

@@ -33,11 +33,14 @@ async def run_experiments(
         ]
     else:
         models: list[Model] = [
-            Model("anthropic/claude-sonnet-4.6"),
-            Model("deepseek/deepseek-v4-pro"),
+            # Model("anthropic/claude-sonnet-4.6"),
+            # Model("deepseek/deepseek-v4-pro"),
             Model("google/gemma-4-31b-it"),
-            Model("openai/gpt-oss-120b"),
+            # Model("openai/gpt-oss-120b"),
             Model("qwen/qwen3.6-35b-a3b"),
+            Model("meta-llama/llama-3.3-70b-instruct"),
+            Model("z-ai/glm-5.2"),
+            Model("mistralai/mistral-small-2603"),
         ]
 
     dataset = load_literature_review_data()
@@ -50,7 +53,7 @@ async def run_experiments(
         *[
             run_experiment(
                 dataset=dataset,
-                resamples=1,
+                resamples=4,
                 model=model,
                 extractor=extractor,
                 judge=judge,
@@ -79,7 +82,7 @@ async def run_experiments(
 async def main() -> None:
     await asyncio.gather(
         run_experiments(strict_refusal_judge=False, helpful_only_models=False),
-        # run_experiments(strict_refusal_judge=True, helpful_only_models=False),
+        run_experiments(strict_refusal_judge=True, helpful_only_models=False),
         # run_experiments(strict_refusal_judge=False, helpful_only_models=True),
         # run_experiments(strict_refusal_judge=True, helpful_only_models=True),
     )
@@ -89,4 +92,5 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 
-# $96.551
+# $117.370
+# $173.728

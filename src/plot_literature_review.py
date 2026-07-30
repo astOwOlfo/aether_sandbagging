@@ -4,11 +4,17 @@ Usage:
     from src.plot_literature_review import plot
     fig = plot(models, results, "plots/literature_review/plot.html")
 
-Five horizontal subplots, each a grouped malicious/control bar pair per model:
-average number of papers per response, average number of claims per response,
-fraction of papers that are not hallucinated, fraction of claims that are
-supported by the paper they are attributed to, and fraction of responses that
-are refusals.
+The top row has five horizontal subplots, each a grouped malicious/control bar
+pair per model: average number of papers per response, average number of claims
+per response, fraction of papers that are not hallucinated, fraction of claims
+that are supported by the paper they are attributed to, and fraction of
+responses that are refusals.
+
+The bottom row has, under each of those metrics except refusals, a single bar
+per model with the fraction of non-tied response pairs where the control
+response scores higher than the malicious one on that metric (tied pairs are
+excluded from the denominator), computed the same way as in
+src/plot_healthbench.py.
 
 Except for the refusal subplot, every average is taken over response pairs: the
 malicious and control response of the ith resample of the jth datapoint, for all
@@ -136,6 +142,34 @@ def _paired_clusters(
     return clusters
 
 
+def _control_beats_malicious_clusters(
+    evaluated_datapoints: list[EvaluatedDatapoint],
+    value: Callable[[ResponseSummary], float | None],
+) -> list[list[float]]:
+    """One cluster per datapoint, with a 0/1 indicator per response pair where
+    neither response is a Failure or a Refusal, both values are not None, and the
+    two values differ, of whether the malicious response scored lower than the
+    control response. Tied pairs are excluded entirely, so the mean is the
+    fraction of non-tied pairs where control beats malicious."""
+    clusters: list[list[float]] = []
+    for datapoint in evaluated_datapoints:
+        cluster: list[float] = []
+        for pair in datapoint.evaluated_response_pairs:
+            if not isinstance(pair.malicious, EvaluatedResponse) or not isinstance(
+                pair.control, EvaluatedResponse
+            ):
+                continue
+            malicious_value: float | None = value(pair.malicious.summary)
+            control_value: float | None = value(pair.control.summary)
+            if malicious_value is None or control_value is None:
+                continue
+            if malicious_value == control_value:
+                continue
+            cluster.append(float(malicious_value < control_value))
+        clusters.append(cluster)
+    return clusters
+
+
 def _refusal_clusters(
     evaluated_datapoints: list[EvaluatedDatapoint], malicious: bool
 ) -> list[list[float]]:
@@ -171,13 +205,16 @@ def plot(
     if len(set(labels)) != len(labels):
         labels = [model.model for model in models]
 
-    # (subplot title, y axis title, cluster function, whether the y axis is [0, 1])
+    # (subplot title, y axis title, cluster function, whether the y axis is
+    # [0, 1], per-response value used for the control-beats-malicious row, or
+    # None if that metric gets no control-beats-malicious subplot)
     subplots: list[
         tuple[
             str,
             str,
             Callable[[list[EvaluatedDatapoint], bool], list[list[float]]],
             bool,
+            Callable[[ResponseSummary], float | None] | None,
         ]
     ] = [
         (
@@ -187,6 +224,7 @@ def plot(
                 datapoints, malicious, _n_papers
             ),
             False,
+            _n_papers,
         ),
         (
             "Claims per response",
@@ -195,6 +233,7 @@ def plot(
                 datapoints, malicious, _n_claims
             ),
             False,
+            _n_claims,
         ),
         (
             "Papers not hallucinated",
@@ -203,6 +242,7 @@ def plot(
                 datapoints, malicious, _fraction_papers_not_hallucinated
             ),
             True,
+            _fraction_papers_not_hallucinated,
         ),
         (
             "Claims supported by papers",
@@ -211,22 +251,29 @@ def plot(
                 datapoints, malicious, _fraction_claims_supported
             ),
             True,
+            _fraction_claims_supported,
         ),
         (
             "Refusals",
             "fraction of non-failed responses refused",
             _refusal_clusters,
             True,
+            None,
         ),
     ]
 
     fig = make_subplots(
-        rows=1,
+        rows=2,
         cols=len(subplots),
-        subplot_titles=[title for title, _, _, _ in subplots],
+        subplot_titles=[title for title, _, _, _, _ in subplots]
+        + [
+            f"Control beats malicious: {title.lower()}" if value_fn is not None else ""
+            for title, _, _, _, value_fn in subplots
+        ],
+        vertical_spacing=0.18,
     )
 
-    for col, (_, y_title, cluster_fn, _) in enumerate(subplots, start=1):
+    for col, (_, y_title, cluster_fn, _, _) in enumerate(subplots, start=1):
         for malicious, name, color in [
             (False, "control", _CONTROL_COLOR),
             (True, "malicious", _MALICIOUS_COLOR),
@@ -260,6 +307,46 @@ def plot(
             )
         fig.update_yaxes(title_text=y_title, row=1, col=col)
 
+    for col, (_, _, _, _, value_fn) in enumerate(subplots, start=1):
+        if value_fn is None:
+            continue
+        means = []
+        ci95s = []
+        for result in results:
+            mean, ci95 = _cluster_mean_and_ci95(
+                _control_beats_malicious_clusters(result.evaluated_datapoints, value_fn)
+            )
+            means.append(mean)
+            ci95s.append(ci95)
+        fig.add_trace(
+            go.Bar(
+                x=labels,
+                y=means,
+                name="control beats malicious",
+                marker_color="#1baf7a",
+                error_y={
+                    "type": "data",
+                    "array": ci95s,
+                    "color": "#52514e",
+                    "thickness": 1.5,
+                    "width": 4,
+                },
+                showlegend=False,
+            ),
+            row=2,
+            col=col,
+        )
+        fig.update_yaxes(
+            title_text="fraction of non-tied pairs where control is higher",
+            tickvals=[0, 0.2, 0.4, 0.5, 0.6, 0.8, 1],
+            row=2,
+            col=col,
+        )
+        # y = 0.5 is the no-directional-difference baseline for the win fraction
+        fig.add_hline(
+            y=0.5, line_dash="dash", line_color="#52514e", line_width=2, row=2, col=col
+        )
+
     fig.update_layout(
         barmode="group",
         bargap=0.35,
@@ -278,17 +365,21 @@ def plot(
             "x": 0.5,
         },
         width=2200,
-        height=500,
+        height=1000,
         margin={"t": 90},
     )
     fig.update_yaxes(range=[0, 1], gridcolor="#e1e0d9", zerolinecolor="#c3c2b7")
     fig.update_xaxes(showgrid=False, linecolor="#c3c2b7")
     # counts are unbounded, so [0, 1] would clip them; the fractions stay in [0, 1]
-    for col, (_, _, _, unit_range) in enumerate(subplots, start=1):
+    for col, (_, _, _, unit_range, value_fn) in enumerate(subplots, start=1):
         if not unit_range:
             fig.update_yaxes(
                 range=None, autorange=True, rangemode="tozero", row=1, col=col
             )
+        # the bottom row has no subplot for metrics without a value function
+        if value_fn is None:
+            fig.update_yaxes(visible=False, row=2, col=col)
+            fig.update_xaxes(visible=False, row=2, col=col)
 
     if html_filename is not None:
         fig.write_html(html_filename, include_plotlyjs=True)

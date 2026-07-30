@@ -47,22 +47,22 @@ def load_healthbench_data(
     if excluded_ids is None:
         excluded_ids = []
     seen_excluded_ids: list[str] = []
-    for raw in raw_data:
+    for row in raw_data:
         id_key = "healthbench_prompt_id"  # "id"
-        if raw[id_key] in excluded_ids:
-            seen_excluded_ids.append(raw[id_key])
+        if row[id_key] in excluded_ids:
+            seen_excluded_ids.append(row[id_key])
             continue
-        matches = [row for row in healthbench if row["prompt_id"] == raw[id_key]]
+        matches = [row for row in healthbench if row["prompt_id"] == row[id_key]]
         assert len(matches) <= 1
         assert len(matches) == 1, (
-            f"no datapoint in healthbench with prompt id '{raw[id_key]}'"
+            f"no datapoint in healthbench with prompt id '{row[id_key]}'"
         )
         original = matches[0]
         data.append(
             Datapoint(
                 original_prompt=original["prompt"],
-                malicious_prompt=raw[malicious_prompt_key],
-                control_prompt=raw["control_prompt"],
+                malicious_prompt=row[malicious_prompt_key],
+                control_prompt=row["control_prompt"],
                 rubrics=[
                     Rubric(criterion=rubric["criterion"], points=rubric["points"])
                     for rubric in original["rubrics"]

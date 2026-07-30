@@ -254,6 +254,7 @@ def plot(
     claim_extractor: str,
     correctness_judge: str,
     refusal_judge: str,
+    model_name_map: dict[str, str] | None = None,
     html_filename: str | None = None,
 ) -> go.Figure:
     assert len(models) == len(results)
@@ -261,6 +262,11 @@ def plot(
     labels: list[str] = [model.model.split("/")[-1] for model in models]
     if len(set(labels)) != len(labels):
         labels = [model.model for model in models]
+    if model_name_map is not None:
+        labels = [
+            model_name_map.get(model.model, model_name_map.get(label, label))
+            for model, label in zip(models, labels, strict=True)
+        ]
 
     # In grid order — (1, 1), (1, 2), (1, 3), (2, 1), (2, 2) — so the list
     # doubles as the subplot_titles order: subplot title, cluster function,
@@ -295,7 +301,7 @@ def plot(
             (1, 2),
         ),
         (
-            "Refusals",
+            "Fraction excluded",
             _refusal_clusters,
             True,
             None,

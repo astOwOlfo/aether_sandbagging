@@ -6,8 +6,9 @@ from src.literature_review import (
     load_literature_review_data,
     run_experiment,
 )
-from src.plot_literature_review import plot
 from src.llm_apis import Model
+from src.plot_literature_review import plot
+from src.visualize_literature_review import visualize
 
 
 async def run_experiments(
@@ -25,25 +26,22 @@ async def run_experiments(
                 provider="vllm",
                 max_parallel=256,
             ),
-            # Model(
-            #     "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark",
-            #     provider="vllm",
-            #     max_parallel=256,
-            # ),
+            Model(
+                "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark",
+                provider="vllm",
+                max_parallel=256,
+            ),
         ]
     else:
         models: list[Model] = [
-            # Model("anthropic/claude-sonnet-4.6"),
-            # Model("deepseek/deepseek-v4-pro"),
             Model("google/gemma-4-31b-it"),
-            # Model("openai/gpt-oss-120b"),
             Model("qwen/qwen3.6-35b-a3b"),
             Model("meta-llama/llama-3.3-70b-instruct"),
             Model("z-ai/glm-5.2"),
             Model("mistralai/mistral-small-2603"),
         ]
 
-    dataset = load_literature_review_data()[:32]
+    dataset = load_literature_review_data()
 
     extractor = Model("z-ai/glm-5.2")
     judge = Model("z-ai/glm-5.2", web_search=True)
@@ -66,32 +64,61 @@ async def run_experiments(
         ]
     )
 
-    plot_dir: str = "plots/literature_review/"
-    os.makedirs(plot_dir, exist_ok=True)
-    plot_file: str = "plot"
-    if strict_refusal_judge:
-        plot_file += "_strict_refusal_judge"
+    plot_model_name_map: dict[str, str] = {
+        "huihui-ai/Huihui-gemma-4-31B-it-abliterated-v2": "gemma-4-31B-it-abliterated-v2",
+        "llmfan46/gpt-oss-120b-heretic-v2": "gpt-oss-120b-heretic-v2",
+        "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark": "Qwen3.6-35B-A3B-Uncensored-Aggressive",
+    }
+
+    filename_suffix: str = ""
+    title: str = (
+        "Literature Reviews Generated with Malicious and Control Prompt Paraphrases"
+    )
     if helpful_only_models:
-        plot_file += "_helpful_only_models"
-    plot_file += ".html"
+        filename_suffix += "_helpful_only"
+        title += "<br>Helpful-Only Models"
+    if strict_refusal_judge:
+        filename_suffix += "_strict_exclusion"
+        title += "<br>Strict Exclusion"
+
+    plot_dir: str = "plots/literature_review/"
+    plot_filename: str = os.path.join(plot_dir, f"plot{filename_suffix}.html")
+    os.makedirs(plot_dir, exist_ok=True)
     plot(
         models=models,
         results=results,
-        title="Literature Reviews with Malicious and Control Prompt Paraphrases"
-        + ("<br>Helpful-Only Models" if helpful_only_models else "")
-        + ("<br>Strict Exclusion" if strict_refusal_judge else ""),
+        title=title,
         claim_extractor=extractor.model.split("/")[-1],
         correctness_judge=judge.model.split("/")[-1]
         + (" with internet access" if judge.web_search else ""),
         refusal_judge=refusal_judge.model.split("/")[-1],
-        html_filename=os.path.join(plot_dir, plot_file),
+        html_filename=plot_filename,
+        model_name_map=plot_model_name_map,
+    )
+
+    visualization_dir: str = "visualizations/literature_review/"
+    visualization_filename: str = os.path.join(
+        visualization_dir, f"visualization{filename_suffix}.html"
+    )
+    os.makedirs(visualization_dir, exist_ok=True)
+    visualize(
+        models=models,
+        results=results,
+        title=title,
+        claim_extractor=extractor.model.split("/")[-1],
+        correctness_judge=judge.model.split("/")[-1]
+        + (" with internet access" if judge.web_search else ""),
+        refusal_judge=refusal_judge.model.split("/")[-1],
+        html_filename=visualization_filename,
+        model_name_map=plot_model_name_map,
+        dataset=dataset,
     )
 
 
 async def main() -> None:
     await asyncio.gather(
-        # run_experiments(strict_refusal_judge=False, helpful_only_models=False),
-        # run_experiments(strict_refusal_judge=True, helpful_only_models=False),
+        run_experiments(strict_refusal_judge=False, helpful_only_models=False),
+        run_experiments(strict_refusal_judge=True, helpful_only_models=False),
         run_experiments(strict_refusal_judge=False, helpful_only_models=True),
         run_experiments(strict_refusal_judge=True, helpful_only_models=True),
     )

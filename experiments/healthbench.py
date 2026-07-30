@@ -9,6 +9,7 @@ from src.healthbench import (
 )
 from src.llm_apis import Model
 from src.plot_healthbench import plot
+from src.visualize_healthbench import visualize
 
 
 async def run_experiments(
@@ -65,29 +66,49 @@ async def run_experiments(
         ]
     )
 
-    plot_dir: str = "plots/healthbench/"
-    os.makedirs(plot_dir, exist_ok=True)
-    plot_file: str = "plot"
-    if strict_refusal_judge:
-        plot_file += "_strict_refusal_judge"
+    plot_model_name_map: dict[str, str] = {
+        "huihui-ai/Huihui-gemma-4-31B-it-abliterated-v2": "gemma-4-31B-it-abliterated-v2",
+        "llmfan46/gpt-oss-120b-heretic-v2": "gpt-oss-120b-heretic-v2",
+        "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark": "Qwen3.6-35B-A3B-Uncensored-Aggressive",
+    }
+
+    filename_suffix: str = ""
+    title: str = "HealthBench Scores with Malicious and Control Prompt Paraphrases"
     if helpful_only_models:
-        plot_file += "_helpful_only_models"
-    plot_file += ".html"
+        filename_suffix += "_helpful_only"
+        title += "<br>Helpful-Only Models"
+    if strict_refusal_judge:
+        filename_suffix += "_strict_exclusion"
+        title += "<br>Strict Exclusion"
+
+    plot_dir: str = "plots/healthbench/"
+    plot_filename: str = os.path.join(plot_dir, f"plot{filename_suffix}.html")
+    os.makedirs(plot_dir, exist_ok=True)
     plot(
         models=models,
         results=results,
-        title="HealthBench Scores with Malicious and Control Paraphrases"
-        + ("<br>Helpful-Only Models" if helpful_only_models else "")
-        + ("<br>Strict Exclusion" if strict_refusal_judge else ""),
+        title=title,
         healthbench_grader=grader.model.split("/")[-1],
         refusal_judge=judge.model.split("/")[-1],
         statement_correctness_judge=judge.model.split("/")[-1],
-        html_filename=os.path.join(plot_dir, plot_file),
-        model_name_map={
-            "huihui-ai/Huihui-gemma-4-31B-it-abliterated-v2": "gemma-4-31B-it-abliterated-v2",
-            "llmfan46/gpt-oss-120b-heretic-v2": "gpt-oss-120b-heretic-v2",
-            "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark": "Qwen3.6-35B-A3B-Uncensored-Aggressive",
-        },
+        html_filename=plot_filename,
+        model_name_map=plot_model_name_map,
+    )
+
+    visualization_dir: str = "visualizations/healthbench/"
+    visualization_filename: str = os.path.join(
+        visualization_dir, f"visualization{filename_suffix}.html"
+    )
+    os.makedirs(visualization_dir, exist_ok=True)
+    visualize(
+        models=models,
+        results=results,
+        title=title,
+        healthbench_grader=grader.model.split("/")[-1],
+        refusal_judge=judge.model.split("/")[-1],
+        statement_correctness_judge=judge.model.split("/")[-1],
+        html_filename=visualization_filename,
+        model_name_map=plot_model_name_map,
     )
 
 

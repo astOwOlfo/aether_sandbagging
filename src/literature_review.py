@@ -353,7 +353,7 @@ async def judge_response(
     n_paper_claims: int = sum(
         len(paper_claims.claims) for paper_claims in claims_and_papers.paper_claims
     )
-    n_paperless_claims: int = len(claims_and_papers.paper_claims)
+    n_paperless_claims: int = len(claims_and_papers.paperless_claims)
     return ResponseSummary(
         n_papers=len(claims_and_papers.paper_claims),
         n_hallucinated_papers=papers_exist.count(False),
@@ -365,8 +365,8 @@ async def judge_response(
         n_paperless_claims=n_paperless_claims,
         n_paper_claims=n_paper_claims,
         n_existing_paper_claims=len(existing_papers_support_claims),
-        n_unsupported_paper_claims=existing_papers_support_claims.count(True),
-        n_supported_paper_claims=existing_papers_support_claims.count(False),
+        n_supported_paper_claims=existing_papers_support_claims.count(True),
+        n_unsupported_paper_claims=existing_papers_support_claims.count(False),
         n_claim_judge_failed=sum(
             int(isinstance(supports, Failure))
             for supports in existing_papers_support_claims

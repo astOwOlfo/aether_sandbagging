@@ -1,3 +1,4 @@
+import os
 import asyncio
 
 from src.literature_review import (
@@ -5,6 +6,7 @@ from src.literature_review import (
     load_literature_review_data,
     run_experiment,
 )
+from src.plot_literature_review import plot
 from src.llm_apis import Model
 
 
@@ -31,8 +33,8 @@ async def run_experiments(
         ]
     else:
         models: list[Model] = [
-            # Model("anthropic/claude-sonnet-4.6"),
-            Model("deepseek/deepseek-v4-pro"),
+            Model("anthropic/claude-sonnet-4.6"),
+            # Model("deepseek/deepseek-v4-pro"),
             # Model("google/gemma-4-31b-it"),
             # Model("openai/gpt-oss-120b"),
             # Model("qwen/qwen3.6-35b-a3b"),
@@ -59,6 +61,18 @@ async def run_experiments(
             )
             for model in models
         ]
+    )
+
+    plot_dir: str = "plots/literature_review/"
+    os.makedirs(plot_dir, exist_ok=True)
+    plot_file: str = "plot"
+    if strict_refusal_judge:
+        plot_file += "_strict_refusal_judge"
+    if helpful_only_models:
+        plot_file += "_helpful_only_models"
+    plot_file += ".html"
+    plot(
+        models=models, results=results, html_filename=os.path.join(plot_dir, plot_file)
     )
 
 

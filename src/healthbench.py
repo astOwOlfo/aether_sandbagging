@@ -302,7 +302,6 @@ async def extract_contradicting_claims(
         extractor, extractor_prompt, seed=seed
     )
     if isinstance(response, StopReason):
-        print("dupa 3, response:", response)
         return Failure.EXTRACTOR_INVALID
 
     resp: str = response.completion.strip()
@@ -325,10 +324,8 @@ async def extract_contradicting_claims(
     except json.decoder.JSONDecodeError:
         # if the response has other text besides the json (forbidden by the formattig instructions but may happen)
         if backticks:
-            print("dupa 9, response:", response.completion)
             return Failure.EXTRACTOR_INVALID
         if "```" not in resp:
-            print("dupa 10, response:", response)
             return Failure.EXTRACTOR_INVALID
         if "```json" in resp:
             resp = resp.split("```json")[1]
@@ -343,21 +340,16 @@ async def extract_contradicting_claims(
         try:
             response_json = json.loads(resp)
         except json.decoder.JSONDecodeError:
-            print("dupa 4, response:", response.completion)
             return Failure.EXTRACTOR_INVALID
 
     if not isinstance(response_json, list):
-        print("dupa 5, response:", response.completion)
         return Failure.EXTRACTOR_INVALID
     for claim_json in response_json:
         if not isinstance(claim_json, dict):
-            print("dupa 6, response:", response.completion)
             return Failure.EXTRACTOR_INVALID
         if set(claim_json.keys()) != {"answer_1_claim", "answer_2_claim"}:
-            print("dupa 7, response:", response.completion)
             return Failure.EXTRACTOR_INVALID
         if not all(isinstance(value, str) for value in claim_json.values()):
-            print("dupa 8, response:", response.completion)
             return Failure.EXTRACTOR_INVALID
 
     return [
@@ -385,7 +377,6 @@ async def claim_correct(claim: str, judge: Model, seed: int) -> bool | Failure:
     response: Completion | StopReason = await generate(judge, judge_prompt, seed=seed)
 
     if isinstance(response, StopReason):
-        print(f"dupa 1: {response}")
         return Failure.CORRECTNESS_JUDGE_INVALID
 
     resp: str = response.completion.lower().strip()
@@ -396,7 +387,6 @@ async def claim_correct(claim: str, judge: Model, seed: int) -> bool | Failure:
         return yes
 
     if yes and no:
-        print("dupa 11, response:", response.completion)
         return Failure.CORRECTNESS_JUDGE_INVALID
 
     # handle common ways in which glm-5.2 incorrectly formats its response
@@ -409,7 +399,6 @@ async def claim_correct(claim: str, judge: Model, seed: int) -> bool | Failure:
         ):
             return b
 
-    print("dupa 2, response:", response.completion)
     return Failure.CORRECTNESS_JUDGE_INVALID
 
 

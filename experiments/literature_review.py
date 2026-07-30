@@ -25,11 +25,11 @@ async def run_experiments(
                 provider="vllm",
                 max_parallel=256,
             ),
-            Model(
-                "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark",
-                provider="vllm",
-                max_parallel=256,
-            ),
+            # Model(
+            #     "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark",
+            #     provider="vllm",
+            #     max_parallel=256,
+            # ),
         ]
     else:
         models: list[Model] = [
@@ -43,7 +43,7 @@ async def run_experiments(
             Model("mistralai/mistral-small-2603"),
         ]
 
-    dataset = load_literature_review_data()
+    dataset = load_literature_review_data()[:32]
 
     extractor = Model("z-ai/glm-5.2")
     judge = Model("z-ai/glm-5.2", web_search=True)
@@ -53,7 +53,7 @@ async def run_experiments(
         *[
             run_experiment(
                 dataset=dataset,
-                resamples=4,
+                resamples=1 if helpful_only_models else 4,
                 model=model,
                 extractor=extractor,
                 judge=judge,
@@ -75,16 +75,25 @@ async def run_experiments(
         plot_file += "_helpful_only_models"
     plot_file += ".html"
     plot(
-        models=models, results=results, html_filename=os.path.join(plot_dir, plot_file)
+        models=models,
+        results=results,
+        title="Literature Reviews with Malicious and Control Prompt Paraphrases"
+        + ("<br>Helpful-Only Models" if helpful_only_models else "")
+        + ("<br>Strict Exclusion" if strict_refusal_judge else ""),
+        claim_extractor=extractor.model.split("/")[-1],
+        correctness_judge=judge.model.split("/")[-1]
+        + (" with internet access" if judge.web_search else ""),
+        refusal_judge=refusal_judge.model.split("/")[-1],
+        html_filename=os.path.join(plot_dir, plot_file),
     )
 
 
 async def main() -> None:
     await asyncio.gather(
-        run_experiments(strict_refusal_judge=False, helpful_only_models=False),
-        run_experiments(strict_refusal_judge=True, helpful_only_models=False),
-        # run_experiments(strict_refusal_judge=False, helpful_only_models=True),
-        # run_experiments(strict_refusal_judge=True, helpful_only_models=True),
+        # run_experiments(strict_refusal_judge=False, helpful_only_models=False),
+        # run_experiments(strict_refusal_judge=True, helpful_only_models=False),
+        run_experiments(strict_refusal_judge=False, helpful_only_models=True),
+        run_experiments(strict_refusal_judge=True, helpful_only_models=True),
     )
 
 
@@ -92,5 +101,4 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 
-# $117.370
-# $173.728
+# $371.498

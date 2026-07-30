@@ -58,7 +58,6 @@ async def run_experiments(
                 strict_refusal_judge=strict_refusal_judge,
                 claim_extractor=judge,
                 claim_correctness_judge=judge,
-                prefilter_malicious_compliances=False,
                 seed=42,
                 tqdm_description=model.model.split("/")[-1],
             )
@@ -77,7 +76,18 @@ async def run_experiments(
     plot(
         models=models,
         results=results,
+        title="HealthBench Scores with Malicious and Control Paraphrases"
+        + ("<br>Helpful-Only Models" if helpful_only_models else "")
+        + ("<br>Strict Exclusion" if strict_refusal_judge else ""),
+        healthbench_grader=grader.model.split("/")[-1],
+        refusal_judge=judge.model.split("/")[-1],
+        statement_correctness_judge=judge.model.split("/")[-1],
         html_filename=os.path.join(plot_dir, plot_file),
+        model_name_map={
+            "huihui-ai/Huihui-gemma-4-31B-it-abliterated-v2": "gemma-4-31B-it-abliterated-v2",
+            "llmfan46/gpt-oss-120b-heretic-v2": "gpt-oss-120b-heretic-v2",
+            "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark": "Qwen3.6-35B-A3B-Uncensored-Aggressive",
+        },
     )
 
 
@@ -85,8 +95,8 @@ async def main() -> None:
     await asyncio.gather(
         run_experiments(strict_refusal_judge=False, helpful_only_models=False),
         run_experiments(strict_refusal_judge=True, helpful_only_models=False),
-        # run_experiments(strict_refusal_judge=False, helpful_only_models=True),
-        # run_experiments(strict_refusal_judge=True, helpful_only_models=True),
+        run_experiments(strict_refusal_judge=False, helpful_only_models=True),
+        run_experiments(strict_refusal_judge=True, helpful_only_models=True),
     )
 
 

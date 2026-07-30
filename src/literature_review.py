@@ -242,7 +242,6 @@ async def paper_exists(paper: str, judge: Model, seed: int) -> bool | Failure:
     hallucinated: bool = "<hallucinated>" in resp
 
     if exists == hallucinated:
-        print("dupa 1", response.completion)
         return Failure.CORRECTNESS_JUDGE_INVALID
 
     return exists
@@ -282,7 +281,6 @@ async def paper_supports_claim(
     failed: bool = "<failed>" in resp
 
     if int(yes) + int(no) + int(failed) != 1:
-        print("dupa 2", response.completion)
         return Failure.CORRECTNESS_JUDGE_INVALID
 
     if failed:

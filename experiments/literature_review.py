@@ -40,7 +40,7 @@ async def run_experiments(
             Model("qwen/qwen3.6-35b-a3b"),
         ]
 
-    dataset = load_literature_review_data()[:32]
+    dataset = load_literature_review_data()
 
     extractor = Model("z-ai/glm-5.2")
     judge = Model("z-ai/glm-5.2", web_search=True)
@@ -87,3 +87,6 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+# $96.551

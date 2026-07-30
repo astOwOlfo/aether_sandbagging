@@ -754,34 +754,6 @@ async def evaluate_refusal(
     assert False, "unreachable"
 
 
-async def filter_malicious_compliances(
-    dataset: list[Datapoint],
-    model: Model,
-    refusal_judge: Model,
-    strict_refusal_judge: bool,
-    seed: int,
-) -> list[Datapoint]:
-    refusal_classifications: list[bool] = await tqdm_asyncio.gather(
-        *[
-            evaluate_refusal(
-                model=model,
-                prompt=datapoint.malicious_prompt,
-                refusal_judge=refusal_judge,
-                strict_refusal_judge=strict_refusal_judge,
-                seed=stable_hash(seed),
-            )
-            for datapoint in dataset
-        ],
-        desc="filtering malicious refusals",
-    )
-
-    return [
-        datapoint
-        for datapoint, is_refusal in zip(dataset, refusal_classifications, strict=True)
-        if is_refusal
-    ]
-
-
 @dataclass(frozen=True, slots=True)
 class ExperimentResult:
     scores: list[DatapointScores]
@@ -797,24 +769,9 @@ async def run_experiment(
     strict_refusal_judge: bool,
     claim_extractor: Model,
     claim_correctness_judge: Model,
-    prefilter_malicious_compliances: bool,
     seed: int,
     tqdm_description: str = "running experiment",
 ) -> ExperimentResult:
-    if prefilter_malicious_compliances:
-        dataset = await filter_malicious_compliances(
-            dataset=dataset,
-            model=model,
-            refusal_judge=refusal_judge,
-            strict_refusal_judge=strict_refusal_judge,
-            seed=stable_hash(seed),
-        )
-
-        if datapoints is not None:
-            assert len(dataset) >= datapoints, (
-                f"not enough datapoints remaining after prefiltering refusals. needed {datapoints}, got {len(dataset)}"
-            )
-
     if datapoints is not None:
         assert len(dataset) >= datapoints, (
             f"not enough datapoints. needed {datapoints}, got {len(dataset)}"

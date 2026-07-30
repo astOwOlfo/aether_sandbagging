@@ -388,16 +388,29 @@ async def claim_correct(claim: str, judge: Model, seed: int) -> bool | Failure:
         print(f"dupa 1: {response}")
         return Failure.CORRECTNESS_JUDGE_INVALID
 
-    # glm-5.2 sometimes answers with a single word "yes" or "no" without <>
-    resp: str = response.completion.lower()
-    yes: bool = "<yes>" in resp or resp.strip() == "yes"
-    no: bool = "<no>" in resp or resp.strip() == "no"
+    resp: str = response.completion.lower().strip()
+    yes: bool = "<yes>" in resp
+    no: bool = "<no>" in resp
 
-    if yes == no:
-        print("dupa 2, response:", response.completion)
+    if yes != no:
+        return yes
+
+    if yes and no:
+        print("dupa 11, response:", response.completion)
         return Failure.CORRECTNESS_JUDGE_INVALID
 
-    return yes
+    # handle common ways in which glm-5.2 incorrectly formats its response
+    for w, b in [("yes", True), ("no", False)]:
+        if (
+            resp == w
+            or resp.startswith(w + "\n")
+            or resp.startswith(w + ".")
+            or resp.startswith(w + ",")
+        ):
+            return b
+
+    print("dupa 2, response:", response.completion)
+    return Failure.CORRECTNESS_JUDGE_INVALID
 
 
 async def evaluate_contradicting_claims(

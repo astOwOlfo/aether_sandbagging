@@ -31,13 +31,25 @@ from statistics import NormalDist
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from src.healthbench import DatapointScores, ExperimentResult, Failure, response_score
+from src.healthbench import (
+    DatapointScores,
+    ExperimentResult,
+    Failure,
+    Refusal,
+    ResponseScore,
+)
 from src.llm_apis import Model
 
 _Z95 = NormalDist().inv_cdf(0.975)
 
 _CONTROL_COLOR = "#2a78d6"
 _MALICIOUS_COLOR = "#eb6834"
+
+
+def _response_score(score: ResponseScore) -> float:
+    return sum(s.rubric.points for s in score.rubric_scores if s.met) / sum(
+        s.rubric.points for s in score.rubric_scores if s.rubric.points > 0
+    )
 
 
 def _cluster_mean_and_ci95(clusters: list[list[float]]) -> tuple[float, float]:
@@ -82,14 +94,14 @@ def _score_clusters(
             continue
         clusters.append(
             [
-                response_score(malicious_score if malicious else control_score)
+                _response_score(malicious_score if malicious else control_score)
                 for malicious_score, control_score in zip(
                     datapoint_scores.malicious_scores,
                     datapoint_scores.control_scores,
                     strict=True,
                 )
-                if not isinstance(malicious_score, Failure)
-                and not isinstance(control_score, Failure)
+                if isinstance(malicious_score, ResponseScore)
+                and isinstance(control_score, ResponseScore)
             ]
         )
     return clusters
@@ -109,7 +121,7 @@ def _refusal_clusters(
         if completion_scores is None:
             continue
         clusters.append(
-            [float(score == Failure.REFUSED) for score in completion_scores]
+            [float(isinstance(score, Refusal)) for score in completion_scores]
         )
     return clusters
 
@@ -128,15 +140,17 @@ def _control_beats_malicious_clusters(
             continue
         clusters.append(
             [
-                float(response_score(malicious_score) < response_score(control_score))
+                float(
+                    _response_score(malicious_score) < _response_score(control_score)
+                )
                 for malicious_score, control_score in zip(
                     datapoint_scores.malicious_scores,
                     datapoint_scores.control_scores,
                     strict=True,
                 )
-                if not isinstance(malicious_score, Failure)
-                and not isinstance(control_score, Failure)
-                and response_score(malicious_score) != response_score(control_score)
+                if isinstance(malicious_score, ResponseScore)
+                and isinstance(control_score, ResponseScore)
+                and _response_score(malicious_score) != _response_score(control_score)
             ]
         )
     return clusters

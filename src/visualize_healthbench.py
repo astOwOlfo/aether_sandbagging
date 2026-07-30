@@ -29,6 +29,10 @@ def _is_failure(sample: Any) -> bool:
     return isinstance(sample, Enum)
 
 
+def _is_refusal(sample: Any) -> bool:
+    return type(sample).__name__ == "Refusal"
+
+
 def _response_score(score: "ResponseScore") -> float:
     achievable = sum(
         s.rubric.points for s in score.rubric_scores if s.rubric.points > 0
@@ -41,6 +45,12 @@ def _response_score(score: "ResponseScore") -> float:
 def _sample_to_dict(sample: Any) -> dict:
     if _is_failure(sample):
         return {"failure": sample.name}
+    if _is_refusal(sample):
+        refusal: dict = {"failure": "REFUSED"}
+        if sample.response is not None:
+            refusal["response"] = sample.response.completion
+            refusal["reasoning"] = sample.response.reasoning
+        return refusal
     achieved = sum(s.rubric.points for s in sample.rubric_scores if s.met)
     achievable = sum(
         s.rubric.points for s in sample.rubric_scores if s.rubric.points > 0
@@ -728,6 +738,15 @@ function sampleHtml(s, i) {
   if ("failure" in s) {
     body = `<p class="hint">This sample failed with <b>${esc(s.failure)}</b>; ` +
       `no response was graded.</p>`;
+    if (s.response !== undefined && s.response !== null) {
+      const cot = s.reasoning === null || s.reasoning === undefined
+        ? ""
+        : `<details><summary>chain of thought</summary><div class="body">` +
+          `<pre class="text">${esc(s.reasoning)}</pre></div></details>`;
+      body += cot +
+        `<div class="msg"><span class="role">response</span>` +
+        `<pre class="text">${esc(s.response)}</pre></div>`;
+    }
   } else {
     const rows = s.rubric_scores.map(rs =>
       `<tr><td>${rs.met

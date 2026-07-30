@@ -2,16 +2,13 @@ import os
 import asyncio
 
 from src.healthbench import (
-    filter_malicious_compliances,
     run_experiment,
     ExperimentResult,
     load_healthbench_data,
     Datapoint,
-    print_experiment_result,
 )
 from src.llm_apis import Model
 from src.plot_healthbench import plot
-from src.visualize_healthbench import visualize
 
 
 async def run_experiments(
@@ -82,19 +79,6 @@ async def run_experiments(
         results=results,
         html_filename=os.path.join(plot_dir, plot_file),
     )
-
-    for model, result in zip(models, results, strict=True):
-        print("=" * 64)
-        print("model:", model)
-        print("strict refusal judge:", strict_refusal_judge)
-        print_experiment_result(result)
-
-        """
-        visualize(
-            scores=result.scores,
-            html_filename=f"visualizations/healthbench-sandbagging-{model.model.split('/')[-1]}-{resamples}{'-prefilter-malicious-refusals' if prefilter_malicious_refusals else ''}-resamples{'-strict-refusal-judge' if strict_refusal_judge else ''}.html",
-        )
-        """
 
 
 async def main() -> None:

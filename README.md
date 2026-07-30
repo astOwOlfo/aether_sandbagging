@@ -44,3 +44,7 @@ vllm serve llmfan46/gpt-oss-120b-heretic-v2
 
 vllm serve DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark --reasoning-parser qwen3
 ```
+
+## Code
+
+Note: some terminology in the code is different from the blogpost (e.g. strict refusal grader instead of strict exclusion).

@@ -10,11 +10,13 @@ fraction of papers that are not hallucinated, fraction of claims that are
 supported by the paper they are attributed to, and fraction of responses that
 are refusals.
 
-Except for the refusal subplot, every average is taken over aligned response
-pairs: the ith malicious and ith control response of the jth datapoint, for all
+Except for the refusal subplot, every average is taken over response pairs: the
+malicious and control response of the ith resample of the jth datapoint, for all
 (i, j) where neither of the two is a Failure or a Refusal. The refusal subplot
-averages a 0/1 refusal indicator over all responses that are not Failures,
-independently for the malicious and the control side.
+averages a 0/1 refusal indicator over the responses that are not Failures. Note
+that control responses are only generated when the corresponding malicious
+response is neither a Failure nor a Refusal, so the control refusal fraction is
+conditional on that, and the two sides are not directly comparable.
 
 The two fraction-of-X subplots average per-response fractions (not pooled
 counts), and skip responses whose denominator is 0. Denominators exclude judge
@@ -114,22 +116,18 @@ def _paired_clusters(
     value: Callable[[ResponseSummary], float | None],
 ) -> list[list[float]]:
     """One cluster per datapoint, containing the value of the malicious (or
-    control) response of every resample where neither the malicious nor the
-    control response is a Failure or a Refusal, skipping the responses whose
-    value is None."""
+    control) response of every pair where neither the malicious nor the control
+    response is a Failure or a Refusal, skipping the responses whose value is
+    None."""
     clusters: list[list[float]] = []
     for datapoint in evaluated_datapoints:
         cluster: list[float] = []
-        for malicious_response, control_response in zip(
-            datapoint.evaluated_malicious_responses,
-            datapoint.evaluated_control_responses,
-            strict=True,
-        ):
-            if not isinstance(malicious_response, EvaluatedResponse) or not isinstance(
-                control_response, EvaluatedResponse
+        for pair in datapoint.evaluated_response_pairs:
+            if not isinstance(pair.malicious, EvaluatedResponse) or not isinstance(
+                pair.control, EvaluatedResponse
             ):
                 continue
-            response = malicious_response if malicious else control_response
+            response = pair.malicious if malicious else pair.control
             response_value: float | None = value(response.summary)
             if response_value is None:
                 continue
@@ -142,14 +140,16 @@ def _refusal_clusters(
     evaluated_datapoints: list[EvaluatedDatapoint], malicious: bool
 ) -> list[list[float]]:
     """One cluster per datapoint, with a 0/1 refusal indicator per malicious (or
-    control) response that is not a Failure."""
+    control) response that is not a Failure. Control responses that were never
+    generated (because the corresponding malicious response is a Failure or a
+    Refusal) are skipped."""
     clusters: list[list[float]] = []
     for datapoint in evaluated_datapoints:
-        responses = (
-            datapoint.evaluated_malicious_responses
-            if malicious
-            else datapoint.evaluated_control_responses
-        )
+        responses: list[EvaluatedResponse | Refusal | Failure] = [
+            response
+            for pair in datapoint.evaluated_response_pairs
+            if (response := pair.malicious if malicious else pair.control) is not None
+        ]
         clusters.append(
             [
                 float(isinstance(response, Refusal))

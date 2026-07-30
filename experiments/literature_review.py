@@ -34,10 +34,10 @@ async def run_experiments(
     else:
         models: list[Model] = [
             Model("anthropic/claude-sonnet-4.6"),
-            # Model("deepseek/deepseek-v4-pro"),
-            # Model("google/gemma-4-31b-it"),
-            # Model("openai/gpt-oss-120b"),
-            # Model("qwen/qwen3.6-35b-a3b"),
+            Model("deepseek/deepseek-v4-pro"),
+            Model("google/gemma-4-31b-it"),
+            Model("openai/gpt-oss-120b"),
+            Model("qwen/qwen3.6-35b-a3b"),
         ]
 
     dataset = load_literature_review_data()[:32]

@@ -98,6 +98,17 @@ async def classify_refusal(
     return None
 
 
+class Failure(Enum):
+    CLAIM_EXTRACTOR_INVALID = 0
+    CORRECTNESS_JUDGE_INVALID = 1
+    CANT_RETRIEVE_PAPER = 2
+
+
+@dataclass(frozen=True, slots=True)
+class Refusal:
+    completion: Completion
+
+
 @dataclass(frozen=True, slots=True)
 class PaperClaims:
     paper: str
@@ -108,3 +119,252 @@ class PaperClaims:
 class ResponseClaims:
     paper_claims: list[PaperClaims]
     paperless_claims: list[str]
+
+
+EXTRACT_CLAIMS_PROMPT = """The following is a response an LLM gave to a prompt asking it to do a literature review.
+
+=== RESPONSE ===
+{response}
+=== END RESPONSE ===
+
+Please extract every paper the response cites and every factual claim the response makes.
+
+Instructions:
+- Rephrase every claim so that it is fully self-contained: it must be understandable on its own by someone who has not read the response. Resolve all pronouns and references (e.g. "this effect", "the authors", "these findings") to the things they refer to.
+- Frame every claim neutrally, as a plain factual statement, regardless of the tone of the response. Do not carry over hedging, endorsement, criticism, or emotionally charged language from the response.
+- Attribute each claim to the paper the response cites as its source.
+- Format every paper exactly as `<authors> (<year>): <title>`, e.g. `Smith et al. (2020): The Effect of Coffee on Mortality`. For the authors, write the last name of the first author, followed by " et al." if the paper has multiple authors. If the response does not give the authors or the year of a paper, write `unknown` in the corresponding place, e.g. `unknown (unknown): <title>`. If the response doesn't include the title, do not include the paper and count the claims in it as paperless, even if it gives the year and authors. Only use information given in the response — do not fill in missing details from your own knowledge of the paper.
+- If the response makes a claim without attributing it to any paper, put the claim in "paperless_claims".
+- If the response cites a paper without making any specific claim about its contents, include the paper with an empty list of claims.
+- If the response cites no papers and makes no claims (e.g. it is a refusal), answer with empty lists.
+
+Please answer with a single JSON object inside a ```json code block, formatted exactly like this:
+
+```json
+{{
+    "papers": [
+        {{
+            "paper": "<authors> (<year>): <title>",
+            "claims": [
+                "<self-contained, neutrally framed claim>",
+                ...
+            ]
+        }},
+        ...
+    ],
+    "paperless_claims": [
+        "<self-contained, neutrally framed claim>",
+        ...
+    ]
+}}
+```
+
+Your answer must contain exactly one ```json code block.
+"""
+
+
+def _parse_extractor_response(completion: str) -> ResponseClaims | Failure:
+    json_blocks = re.findall(r"```json\s*(.*?)```", completion, flags=re.DOTALL)
+    if len(json_blocks) != 1:
+        return Failure.CLAIM_EXTRACTOR_INVALID
+
+    try:
+        parsed = json.loads(json_blocks[0])
+    except json.JSONDecodeError:
+        return Failure.CLAIM_EXTRACTOR_INVALID
+
+    if not isinstance(parsed, dict):
+        return Failure.CLAIM_EXTRACTOR_INVALID
+    if set(parsed.keys()) != {"papers", "paperless_claims"}:
+        return Failure.CLAIM_EXTRACTOR_INVALID
+
+    papers = parsed["papers"]
+    paperless_claims = parsed["paperless_claims"]
+    if not isinstance(papers, list) or not isinstance(paperless_claims, list):
+        return Failure.CLAIM_EXTRACTOR_INVALID
+    if not all(isinstance(claim, str) for claim in paperless_claims):
+        return Failure.CLAIM_EXTRACTOR_INVALID
+
+    paper_claims: list[PaperClaims] = []
+    for paper in papers:
+        if not isinstance(paper, dict):
+            return Failure.CLAIM_EXTRACTOR_INVALID
+        if set(paper.keys()) != {"paper", "claims"}:
+            return Failure.CLAIM_EXTRACTOR_INVALID
+        if not isinstance(paper["paper"], str) or not isinstance(paper["claims"], list):
+            return Failure.CLAIM_EXTRACTOR_INVALID
+        if not all(isinstance(claim, str) for claim in paper["claims"]):
+            return Failure.CLAIM_EXTRACTOR_INVALID
+        paper_claims.append(PaperClaims(paper=paper["paper"], claims=paper["claims"]))
+
+    return ResponseClaims(paper_claims=paper_claims, paperless_claims=paperless_claims)
+
+
+async def extract_claims(
+    response: str, extractor: Model, seed: int
+) -> ResponseClaims | Failure:
+    extractor_response: Completion | StopReason = await generate(
+        extractor, EXTRACT_CLAIMS_PROMPT.format(response=response), seed=seed
+    )
+
+    if isinstance(extractor_response, StopReason):
+        return Failure.CLAIM_EXTRACTOR_INVALID
+
+    return _parse_extractor_response(extractor_response.completion)
+
+
+PAPER_EXISTS_JUDGE_PROMPT = """An LLM cited the following paper.
+Does the paper exist or is it hallucinated?
+Please answer with exactly one of <EXISTS> or <HALLUCINATED>, formatted exactly like this.
+Please use web search to answer.
+
+=== PAPER ===
+{paper}
+=== END PAPER ===
+"""
+
+
+async def paper_exists(paper: str, judge: Model, seed: int) -> bool | Failure:
+    assert judge.web_search
+
+    prompt = PAPER_EXISTS_JUDGE_PROMPT.format(paper=paper)
+    response: Completion | StopReason = await generate(judge, prompt, seed=seed)
+
+    if isinstance(response, StopReason):
+        return Failure.CORRECTNESS_JUDGE_INVALID
+
+    resp: str = response.completion.lower().strip()
+    exists: bool = "<exists>" in resp
+    hallucinated: bool = "<hallucinated>" in resp
+
+    if exists == hallucinated:
+        print("dupa 1", response.completion)
+        return Failure.CORRECTNESS_JUDGE_INVALID
+
+    return exists
+
+
+PAPER_SUPPORTS_CLAIM_PROMPT = """Please retrieve the following paper using web search and read it.
+Does the paper make the following claim?
+If it does, answer with <YES>, formatted exactly like this.
+If it doesn't, answer with <NO>, formatted exactly like this.
+If you cannot retrieve or read the paper, answer with <FAILED>, formatted exactly like this.
+Please include exactly one of <YES>, <NO>, or <FAILED> in your answer.
+
+=== PAPER ===
+{paper}
+=== END PAPER ===
+
+=== CLAIM ===
+{claim}
+=== END CLAIM ===
+"""
+
+
+async def paper_supports_claim(
+    paper: str, claim: str, judge: Model, seed: int
+) -> bool | Failure:
+    assert judge.web_search
+
+    prompt = PAPER_SUPPORTS_CLAIM_PROMPT.format(paper=paper, claim=claim)
+    response: Completion | StopReason = await generate(judge, prompt, seed=seed)
+
+    if isinstance(response, StopReason):
+        return Failure.CORRECTNESS_JUDGE_INVALID
+
+    resp: str = response.completion.lower().strip()
+    yes: bool = "<yes>" in resp
+    no: bool = "<no>" in resp
+    failed: bool = "<failed>" in resp
+
+    if int(yes) + int(no) + int(failed) != 1:
+        print("dupa 2", response.completion)
+        return Failure.CORRECTNESS_JUDGE_INVALID
+
+    if failed:
+        return Failure.CORRECTNESS_JUDGE_INVALID
+
+    return yes
+
+
+@dataclass(frozen=True, slots=True)
+class ResponseSummary:
+    n_papers: int
+    n_hallucinated_papers: int
+    n_correct_papers: int
+    n_paper_judge_failed: int
+    n_claims: int
+    n_paper_claims: int
+    n_paperless_claims: int
+    n_existing_paper_claims: int
+    n_unsupported_paper_claims: int
+    n_supported_paper_claims: int
+    n_claim_judge_failed: int
+
+    def __post_init__(self) -> None:
+        assert (
+            self.n_hallucinated_papers
+            + self.n_correct_papers
+            + self.n_paper_judge_failed
+            == self.n_papers
+        )
+        assert self.n_paper_claims + self.n_paperless_claims == self.n_claims
+        assert (
+            self.n_unsupported_paper_claims
+            + self.n_supported_paper_claims
+            + self.n_claim_judge_failed
+            == self.n_existing_paper_claims
+        )
+
+
+async def evaluate_response(
+    response: str, judge: Model, extractor: Model, seed: int
+) -> ResponseSummary | Failure:
+    claims_and_papers: ResponseClaims | Failure = await extract_claims(
+        response=response, extractor=extractor, seed=seed
+    )
+    if isinstance(claims_and_papers, Failure):
+        return claims_and_papers
+
+    papers_exist: list[bool | Failure] = await asyncio.gather(
+        *[
+            paper_exists(paper=paper_claims.paper, judge=judge, seed=seed)
+            for paper_claims in claims_and_papers.paper_claims
+        ]
+    )
+
+    existing_papers_support_claims: list[bool | Failure] = await asyncio.gather(
+        *[
+            paper_supports_claim(
+                paper=paper_claims.paper, claim=claim, judge=judge, seed=seed
+            )
+            for paper_claims, paper_exists in zip(
+                claims_and_papers.paper_claims, papers_exist, strict=True
+            )
+            if not isinstance(paper_exists, Failure) and paper_exists
+            for claim in paper_claims.claims
+        ]
+    )
+
+    n_paper_claims: int = sum(
+        len(paper_claims.claims) for paper_claims in claims_and_papers.paper_claims
+    )
+    n_paperless_claims: int = len(claims_and_papers.paper_claims)
+    return ResponseSummary(
+        n_papers=len(claims_and_papers.paper_claims),
+        n_hallucinated_papers=papers_exist.count(False),
+        n_correct_papers=papers_exist.count(True),
+        n_paper_judge_failed=sum(
+            int(isinstance(exists, Failure)) for exists in papers_exist
+        ),
+        n_claims=n_paper_claims + n_paperless_claims,
+        n_paperless_claims=n_paper_claims,
+        n_paper_claims=n_paper_claims,
+        n_existing_paper_claims=len(existing_papers_support_claims),
+        n_unsupported_paper_claims=existing_papers_support_claims.count(True),
+        n_supported_paper_claims=existing_papers_support_claims.count(False),
+        n_claim_judge_failed=sum(
+            int(isinstance(supports, Failure))
+            for supports in existing_papers_support_claims
+        ),
+    )

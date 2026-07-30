@@ -116,8 +116,8 @@ async def main() -> None:
     await asyncio.gather(
         run_experiments(strict_refusal_judge=False, helpful_only_models=False),
         run_experiments(strict_refusal_judge=True, helpful_only_models=False),
-        run_experiments(strict_refusal_judge=False, helpful_only_models=True),
-        run_experiments(strict_refusal_judge=True, helpful_only_models=True),
+        # run_experiments(strict_refusal_judge=False, helpful_only_models=True),
+        # run_experiments(strict_refusal_judge=True, helpful_only_models=True),
     )
 
 

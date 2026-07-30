@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Any, Literal
 from dataclasses import dataclass, asdict
 
-from src.llm_apis import Model, generate, Completion, StopReason
+from src.llm_apis import REFUSAL_STOP_REASONS, Model, generate, Completion, StopReason
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +43,13 @@ def load_literature_review_data(
     Random(shuffle_seed).shuffle(data)
 
     return data
+
+
+def stable_hash(x: Any, bits: int = 64) -> int:
+    assert bits % 8 == 0
+    s: str = json.dumps(x)
+    digest = hashlib.blake2b(s.encode("utf-8"), digest_size=bits // 8).digest()
+    return int.from_bytes(digest, "big")
 
 
 CLASSIFY_REFUSAL_PROMPT = """An LLM was given the following prompt and gave the following answer.
@@ -99,14 +106,16 @@ async def classify_refusal(
 
 
 class Failure(Enum):
-    CLAIM_EXTRACTOR_INVALID = 0
-    CORRECTNESS_JUDGE_INVALID = 1
-    CANT_RETRIEVE_PAPER = 2
+    INVALID_STOP_REASON = 0
+    REFUSAL_JUDGE_INVALID = 1
+    CLAIM_EXTRACTOR_INVALID = 2
+    CORRECTNESS_JUDGE_INVALID = 3
+    CANT_RETRIEVE_PAPER = 4
 
 
 @dataclass(frozen=True, slots=True)
 class Refusal:
-    completion: Completion
+    response: Completion | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,7 +291,7 @@ async def paper_supports_claim(
         return Failure.CORRECTNESS_JUDGE_INVALID
 
     if failed:
-        return Failure.CORRECTNESS_JUDGE_INVALID
+        return Failure.CANT_RETRIEVE_PAPER
 
     return yes
 
@@ -317,7 +326,7 @@ class ResponseSummary:
         )
 
 
-async def evaluate_response(
+async def judge_response(
     response: str, judge: Model, extractor: Model, seed: int
 ) -> ResponseSummary | Failure:
     claims_and_papers: ResponseClaims | Failure = await extract_claims(
@@ -367,4 +376,121 @@ async def evaluate_response(
             int(isinstance(supports, Failure))
             for supports in existing_papers_support_claims
         ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluatedResponse:
+    response: Completion
+    summary: ResponseSummary
+
+
+async def evaluate_single(
+    prompt: str,
+    model: Model,
+    extractor: Model,
+    judge: Model,
+    refusal_judge: Model,
+    strict_refusal_judge: bool,
+    seed: int,
+) -> EvaluatedResponse | Refusal | Failure:
+    response: Completion | StopReason = await generate(model, prompt, seed=seed)
+
+    if response in REFUSAL_STOP_REASONS:
+        return Refusal(response=None)
+    if isinstance(response, StopReason):
+        return Failure.INVALID_STOP_REASON
+
+    refused: bool | None = await classify_refusal(
+        prompt=prompt,
+        response=response.completion,
+        judge=refusal_judge,
+        strict=strict_refusal_judge,
+        seed=seed,
+    )
+    if refused is None:
+        return Failure.REFUSAL_JUDGE_INVALID
+    if refused:
+        return Refusal(response=response)
+
+    summary: ResponseSummary | Failure = await judge_response(
+        response=response.completion, judge=judge, extractor=extractor, seed=seed
+    )
+    if isinstance(summary, Failure):
+        return summary
+
+    return EvaluatedResponse(response=response, summary=summary)
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluatedDatapoint:
+    evaluated_malicious_responses: list[EvaluatedResponse | Refusal | Failure]
+    evaluated_control_responses: list[EvaluatedResponse | Refusal | Failure]
+
+    def __post_init__(self) -> None:
+        assert len(self.evaluated_malicious_responses) == len(
+            self.evaluated_control_responses
+        )
+
+
+async def evaluate_datapoint(
+    datapoint: Datapoint,
+    resamples: int,
+    model: Model,
+    extractor: Model,
+    judge: Model,
+    refusal_judge: Model,
+    strict_refusal_judge: bool,
+    seed: int,
+) -> EvaluatedDatapoint:
+    evaluated_responses: list[
+        EvaluatedResponse | Refusal | Failure
+    ] = await asyncio.gather(
+        *[
+            evaluate_single(
+                prompt=prompt,
+                model=model,
+                extractor=extractor,
+                judge=judge,
+                refusal_judge=refusal_judge,
+                strict_refusal_judge=strict_refusal_judge,
+                seed=stable_hash([seed, resample]),
+            )
+            for prompt in [datapoint.malicious_prompt, datapoint.control_prompt]
+            for resample in range(resamples)
+        ]
+    )
+
+    return EvaluatedDatapoint(
+        evaluated_malicious_responses=evaluated_responses[:resamples],
+        evaluated_control_responses=evaluated_responses[resamples:],
+    )
+
+
+async def run_experiment(
+    dataset: list[Datapoint],
+    resamples: int,
+    model: Model,
+    extractor: Model,
+    judge: Model,
+    refusal_judge: Model,
+    strict_refusal_judge: bool,
+    seed: int,
+    tqdm_description: str = "running experiment",
+) -> list[EvaluatedDatapoint]:
+    return await tqdm_asyncio.gather(
+        *[
+            evaluate_datapoint(
+                datapoint=datapoint,
+                resamples=resamples,
+                model=model,
+                extractor=extractor,
+                judge=judge,
+                refusal_judge=refusal_judge,
+                strict_refusal_judge=strict_refusal_judge,
+                seed=seed,
+            )
+            for datapoint in dataset
+        ],
+        desc=tqdm_description,
     )

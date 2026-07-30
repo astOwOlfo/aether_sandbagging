@@ -46,6 +46,9 @@ class StopReason(Enum):
     TOOL_CALLS = "tool_calls"
 
 
+REFUSAL_STOP_REASONS: list[StopReason] = [StopReason.CONTENT_FILTER]
+
+
 @dataclass(frozen=True, slots=True)
 class Completion:
     completion: str

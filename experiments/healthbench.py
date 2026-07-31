@@ -13,7 +13,9 @@ from src.visualize_healthbench import visualize
 
 
 async def run_experiments(
-    strict_refusal_judge: bool, helpful_only_models: bool
+    strict_refusal_judge: bool,
+    helpful_only_models: bool,
+    simplified_plot_only: bool = False,
 ) -> None:
     if helpful_only_models:
         models: list[Model] = [
@@ -23,12 +25,12 @@ async def run_experiments(
                 max_parallel=256,
             ),
             Model(
-                "llmfan46/gpt-oss-120b-heretic-v2",
+                "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark",
                 provider="vllm",
                 max_parallel=256,
             ),
             Model(
-                "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark",
+                "llmfan46/gpt-oss-120b-heretic-v2",
                 provider="vllm",
                 max_parallel=256,
             ),
@@ -67,13 +69,15 @@ async def run_experiments(
     )
 
     plot_model_name_map: dict[str, str] = {
-        "huihui-ai/Huihui-gemma-4-31B-it-abliterated-v2": "gemma-4-31B-it-abliterated-v2",
-        "llmfan46/gpt-oss-120b-heretic-v2": "gpt-oss-120b-heretic-v2",
-        "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark": "Qwen3.6-35B-A3B-Uncensored-Aggressive",
+        "huihui-ai/Huihui-gemma-4-31B-it-abliterated-v2": "gemma-4-31B-it-abliterated",
+        "DreamFast/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Safetensor-Benchmark": "qwen3.6-35b-a3b-Uncensored",
+        "llmfan46/gpt-oss-120b-heretic-v2": "gpt-oss-120b-heretic",
     }
 
     filename_suffix: str = ""
     title: str = "HealthBench Scores with Malicious and Control Prompt Paraphrases"
+    if simplified_plot_only:
+        filename_suffix += "_simplified"
     if helpful_only_models:
         filename_suffix += "_helpful_only"
         title += "<br>Helpful-Only Models"
@@ -93,7 +97,11 @@ async def run_experiments(
         statement_correctness_judge=judge.model.split("/")[-1],
         html_filename=plot_filename,
         model_name_map=plot_model_name_map,
+        model_legend=False,
     )
+
+    if simplified_plot_only:
+        return
 
     visualization_dir: str = "visualizations/healthbench/"
     visualization_filename: str = os.path.join(
@@ -114,10 +122,15 @@ async def run_experiments(
 
 async def main() -> None:
     await asyncio.gather(
+        run_experiments(
+            strict_refusal_judge=False,
+            helpful_only_models=False,
+            simplified_plot_only=True,
+        ),
         run_experiments(strict_refusal_judge=False, helpful_only_models=False),
         run_experiments(strict_refusal_judge=True, helpful_only_models=False),
-        # run_experiments(strict_refusal_judge=False, helpful_only_models=True),
-        # run_experiments(strict_refusal_judge=True, helpful_only_models=True),
+        run_experiments(strict_refusal_judge=False, helpful_only_models=True),
+        run_experiments(strict_refusal_judge=True, helpful_only_models=True),
     )
 
 

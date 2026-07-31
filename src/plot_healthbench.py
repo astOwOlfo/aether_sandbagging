@@ -9,8 +9,13 @@ Usage:
     fig.write_html("visualizations/comparison.html")
 
 Three subplots in a row: grouped control/malicious bar pairs per model for
-average rubric score, refusal fraction, and fraction of contradicting claims
-that are correct. All bars carry 95% error bars and all y axes span [0, 1].
+average rubric score and fraction of contradicting claims that are correct, and,
+to their right, a single bar per model for the fraction of completion pairs
+excluded because the malicious or the control completion is a refusal (a
+property of the pair, hence one bar rather than a pair of bars; pairs where
+either completion is a judge or generation failure are left out of both the
+numerator and the denominator, since they are excluded for a different reason).
+All bars carry 95% error bars and all y axes span [0, 1].
 
 Unlike ScoreSummary (which averages per datapoint first), the score subplot
 averages unweighted over all (datapoint, resample) pairs where both the
@@ -46,6 +51,13 @@ _Z95 = NormalDist().inv_cdf(0.975)
 
 _CONTROL_COLOR = "#2a78d6"
 _MALICIOUS_COLOR = "#eb6834"
+# subplots whose metric is a property of a completion pair get a single neutral
+# bar per model instead of a control/malicious pair
+_PAIR_COLOR = "#8b8a82"
+# width of one bar of a control/malicious pair, in category units, given the
+# bargap and bargroupgap of the layout below; single bars match it so that they
+# do not fill their whole slot
+_SINGLE_BAR_WIDTH = 0.305
 
 
 def _response_score(score: ResponseScore) -> float:
@@ -172,21 +184,30 @@ def _score_diff_clusters(scores: list[DatapointScores]) -> list[list[float]]:
     return clusters
 
 
-def _refusal_clusters(
-    scores: list[DatapointScores], malicious: bool
-) -> list[list[float]]:
-    """One cluster per datapoint, with a 0/1 refusal indicator per completion."""
+def _excluded_clusters(scores: list[DatapointScores]) -> list[list[float]]:
+    """One cluster per datapoint, with a 0/1 indicator per completion pair of
+    whether the pair is excluded because the malicious or the control completion
+    is a refusal. Pairs where either completion is a Failure are skipped: those
+    are excluded for a different reason. This is a property of the pair, so it
+    is a single number per model rather than one per condition."""
     clusters: list[list[float]] = []
     for datapoint_scores in scores:
-        completion_scores = (
-            datapoint_scores.malicious_scores
-            if malicious
-            else datapoint_scores.control_scores
-        )
-        if completion_scores is None:
+        if datapoint_scores.control_scores is None:
             continue
         clusters.append(
-            [float(isinstance(score, Refusal)) for score in completion_scores]
+            [
+                float(
+                    isinstance(malicious_score, Refusal)
+                    or isinstance(control_score, Refusal)
+                )
+                for malicious_score, control_score in zip(
+                    datapoint_scores.malicious_scores,
+                    datapoint_scores.control_scores,
+                    strict=True,
+                )
+                if not isinstance(malicious_score, Failure)
+                and not isinstance(control_score, Failure)
+            ]
         )
     return clusters
 
@@ -218,6 +239,7 @@ def plot(
     statement_correctness_judge: str,
     model_name_map: dict[str, str] | None = None,
     html_filename: str | None = None,
+    model_legend: bool = True,
 ) -> go.Figure:
     assert len(models) == len(results)
 
@@ -230,22 +252,39 @@ def plot(
             for model, label in zip(models, labels, strict=True)
         ]
 
-    # Each subplot: title, per-condition cluster function, and — for the one
-    # that gets a p value — the paired malicious-minus-control difference
-    # cluster function with the alternative hypothesis of its z test against 0.
+    # Each subplot: title, per-condition cluster function, whether the subplot
+    # gets a control/malicious bar pair (as opposed to a single bar, for a
+    # metric that is a property of the pair and so ignores the condition), and —
+    # for the one that gets a p value — the paired malicious-minus-control
+    # difference cluster function with the alternative hypothesis of its z test
+    # against 0.
     subplots: list[
         tuple[
             str,
             Callable[[list[DatapointScores], bool], list[list[float]]],
+            bool,
             Callable[[list[DatapointScores]], list[list[float]]] | None,
             str | None,
         ]
     ] = [
-        ("Average HealthBench score", _score_clusters, _score_diff_clusters, "less"),
-        ("Fraction excluded", _refusal_clusters, None, None),
+        (
+            "Average HealthBench score",
+            _score_clusters,
+            True,
+            _score_diff_clusters,
+            "less",
+        ),
         (
             "Fraction of statements on which<br>responses contradict each other<br>that are correct",
             _claim_correct_clusters,
+            True,
+            None,
+            None,
+        ),
+        (
+            "Fraction excluded",
+            lambda scores, _malicious: _excluded_clusters(scores),
+            False,
             None,
             None,
         ),
@@ -253,23 +292,58 @@ def plot(
 
     positions: list[tuple[int, int]] = [(1, 1), (1, 2), (1, 3)]
 
+    # The top margin stacks, from the top: the title, the legend, and the
+    # grader/judge caption, above the (three line tall) row 1 subplot titles.
+    # Everything is laid out in pixels from the top of the figure and converted
+    # to the coordinates plotly wants.
+    #
+    # The title grows upwards from a fixed bottom edge into space reserved for
+    # _RESERVED_TITLE_LINES lines, so that titles of different lengths give
+    # figures of identical size, with the title in the same font size at the
+    # same distance above the legend. (Plotly never rescales title text, so a
+    # title only ever looks smaller because the figure it sits in is bigger.)
+    _TITLE_TOP = 16
+    _TITLE_LINE_HEIGHT = 26
+    _RESERVED_TITLE_LINES = 3
+    _LEGEND_HEIGHT = 50  # two stacked entries
+    _CAPTION_HEIGHT = 54  # three lines
+    _SUBPLOT_TITLE_SHIFT = 14  # gap between a subplot title and its subplot
+    _SUBPLOT_TITLE_LINE_HEIGHT = 40 / 3  # the titles are three lines tall
+    _SUBPLOT_TITLES_HEIGHT = (
+        3 * _SUBPLOT_TITLE_LINE_HEIGHT + _SUBPLOT_TITLE_SHIFT
+    )  # three lines, plus the gap
+    # gap below the legend (or the caption, when there is one), a line and a
+    # half of a subplot title taller than the rest of the stack's gaps
+    _GAP_BELOW_LEGEND = round(10 + 1.5 * _SUBPLOT_TITLE_LINE_HEIGHT)
+    _PLOT_AREA_HEIGHT = 380
+    _MARGIN_BOTTOM = 90
+
     fig = make_subplots(
         rows=1,
         cols=3,
         subplot_titles=[subplot_title for subplot_title, *_ in subplots],
         horizontal_spacing=0.08,
     )
+    # at this point the only annotations are the subplot titles; lift them a
+    # little off their subplots
+    for annotation in fig.layout.annotations:
+        annotation.yshift = _SUBPLOT_TITLE_SHIFT
 
-    for (row, col), (_, cluster_fn, diff_cluster_fn, alternative) in zip(
+    for (row, col), (_, cluster_fn, paired, diff_cluster_fn, alternative) in zip(
         positions, subplots, strict=True
     ):
         # highest error bar tip of each control/malicious bar pair, where the
         # pair's p value annotation goes
         group_tops: list[float] = [0.0] * len(results)
-        for malicious, name, color in [
-            (False, "control paraphrases", _CONTROL_COLOR),
-            (True, "malicious paraphrases", _MALICIOUS_COLOR),
-        ]:
+        bars: list[tuple[bool, str | None, str]] = (
+            [
+                (False, "control paraphrases", _CONTROL_COLOR),
+                (True, "malicious paraphrases", _MALICIOUS_COLOR),
+            ]
+            if paired
+            else [(False, None, _PAIR_COLOR)]
+        )
+        for malicious, name, color in bars:
             means = []
             ci95s = []
             for i, result in enumerate(results):
@@ -284,6 +358,7 @@ def plot(
                     y=means,
                     name=name,
                     marker_color=color,
+                    width=None if paired else _SINGLE_BAR_WIDTH,
                     error_y={
                         "type": "data",
                         "array": ci95s,
@@ -292,7 +367,7 @@ def plot(
                         "width": 4,
                     },
                     legendgroup=name,
-                    showlegend=(row, col) == positions[0],
+                    showlegend=paired and (row, col) == positions[0],
                 ),
                 row=row,
                 col=col,
@@ -310,33 +385,18 @@ def plot(
                 col=col,
             )
 
-    # The top margin stacks, from the top: the title, the legend, and the
-    # grader/judge caption, above the (three line tall) row 1 subplot titles.
-    # Everything is laid out in pixels from the top of the figure and converted
-    # to the coordinates plotly wants.
-    #
-    # The title grows upwards from a fixed bottom edge into space reserved for
-    # _RESERVED_TITLE_LINES lines, so that titles of different lengths give
-    # figures of identical size, with the title in the same font size at the
-    # same distance above the legend. (Plotly never rescales title text, so a
-    # title only ever looks smaller because the figure it sits in is bigger.)
-    _TITLE_TOP = 16
-    _TITLE_LINE_HEIGHT = 26
-    _RESERVED_TITLE_LINES = 3
-    _LEGEND_HEIGHT = 50  # two stacked entries
-    _CAPTION_HEIGHT = 54  # three lines
-    _SUBPLOT_TITLES_HEIGHT = 48  # three lines
-    _PLOT_AREA_HEIGHT = 380
-    _MARGIN_BOTTOM = 90
-
     title_lines: int = title.count("<br>") + 1
     title_bottom: int = _TITLE_TOP + _TITLE_LINE_HEIGHT * max(
         _RESERVED_TITLE_LINES, title_lines
     )
     title_top: int = title_bottom - _TITLE_LINE_HEIGHT * title_lines
     legend_top: int = title_bottom + 22
-    caption_top: int = legend_top + _LEGEND_HEIGHT + 8
-    margin_top: int = caption_top + _CAPTION_HEIGHT + 10 + _SUBPLOT_TITLES_HEIGHT
+    # without the caption, the space it and its gap take is removed entirely
+    caption_top: int = legend_top + _LEGEND_HEIGHT + (8 if model_legend else 0)
+    caption_height: int = _CAPTION_HEIGHT if model_legend else 0
+    margin_top: int = round(
+        caption_top + caption_height + _GAP_BELOW_LEGEND + _SUBPLOT_TITLES_HEIGHT
+    )
     height: int = margin_top + _PLOT_AREA_HEIGHT + _MARGIN_BOTTOM
 
     def _paper_y(pixels_from_top: float) -> float:
@@ -380,20 +440,21 @@ def plot(
         height=height,
         margin={"t": margin_top, "b": _MARGIN_BOTTOM},
     )
-    fig.add_annotation(
-        text=f"HealthBench grader: {healthbench_grader}<br>"
-        f"Refusal judge: {refusal_judge}<br>"
-        f"Statement correctness judge: {statement_correctness_judge}",
-        xref="paper",
-        yref="paper",
-        x=0.5,
-        xanchor="center",
-        y=_paper_y(caption_top),
-        yanchor="top",
-        align="center",
-        showarrow=False,
-        font={"size": 13, "color": "#52514e"},
-    )
+    if model_legend:
+        fig.add_annotation(
+            text=f"HealthBench grader: {healthbench_grader}<br>"
+            f"Refusal judge: {refusal_judge}<br>"
+            f"Statement correctness judge: {statement_correctness_judge}",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            xanchor="center",
+            y=_paper_y(caption_top),
+            yanchor="top",
+            align="center",
+            showarrow=False,
+            font={"size": 13, "color": "#52514e"},
+        )
     fig.update_yaxes(range=[0, 1], gridcolor="#e1e0d9", zerolinecolor="#c3c2b7")
     fig.update_xaxes(showgrid=False, linecolor="#c3c2b7")
 

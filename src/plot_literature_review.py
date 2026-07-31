@@ -8,13 +8,18 @@ Usage:
     fig.write_html("plots/literature_review/plot.html")
 
 Five subplots: a 2x2 grid of grouped malicious/control bar pairs per model with
-average number of papers per response, average number of claims per response,
-fraction of papers that are not hallucinated, and fraction of claims that are
-supported by the paper they are attributed to, plus a fraction of excluded
+average number of papers per response, fraction of papers that are not
+hallucinated, average number of claims per response, and fraction of claims that
+are supported by the paper they are attributed to, plus a fraction of excluded
 response pairs subplot to the right of the grid, vertically centered. With
 papers_only=True, only the papers per response, fraction papers not
 hallucinated, and fraction excluded subplots are drawn, in that order, in a
 single row laid out like src/plot_healthbench.py.
+
+A tint behind the plotting area says which family a subplot's metric belongs to:
+how extensive the response is, or how good what it says is. The exclusion
+fraction is neither, so that subplot keeps the plain background. A second legend,
+beside the control/malicious one, is the key to the two tints.
 
 Except for the exclusion subplot, every average is taken over response pairs:
 the malicious and control response of the ith resample of the jth datapoint, for
@@ -68,6 +73,16 @@ _PAIR_COLOR = "#8b8a82"
 # bargap and bargroupgap of the layout below; single bars match it so that they
 # do not fill their whole slot
 _SINGLE_BAR_WIDTH = 0.305
+
+# A wash behind the plotting area tells the two families of metrics apart: how
+# much the response says versus how good what it says is. The exclusion subplot
+# measures neither, so it keeps the plain background. The tints are nearly
+# neutral so that they do not compete with the control/malicious colours; the
+# legend swatches use the same tints, outlined so that they read at swatch size.
+_DETAILEDNESS_TINT = "#f3ecdc"
+_DETAILEDNESS_TINT_EDGE = "#cbbc98"
+_QUALITY_TINT = "#e6e9f5"
+_QUALITY_TINT_EDGE = "#b3bcdf"
 
 
 def _cluster_mean_and_se(clusters: list[list[float]]) -> tuple[float, float]:
@@ -288,7 +303,8 @@ def plot(
     # metric that is a property of the pair and so ignores the condition),
     # whether the y axis is [0, 1], per-response value whose paired
     # malicious-minus-control difference gives the p value (None for no p
-    # value), and the subplot's (row, col).
+    # value), the subplot's (row, col), and the tint of its plotting area ("" for
+    # no tint).
     Subplot = tuple[
         str,
         Callable[[list[EvaluatedDatapoint], bool], list[list[float]]],
@@ -296,6 +312,7 @@ def plot(
         bool,
         Callable[[ResponseSummary], float | None] | None,
         tuple[int, int],
+        str,
     ]
     papers_subplot: Subplot = (
         "Papers per response",
@@ -306,6 +323,7 @@ def plot(
         False,
         _n_papers,
         (1, 1),
+        _DETAILEDNESS_TINT,
     )
     subplots: list[Subplot]
     if papers_only:
@@ -320,6 +338,7 @@ def plot(
                 True,
                 _fraction_papers_not_hallucinated,
                 (1, 2),
+                _QUALITY_TINT,
             ),
             (
                 "Fraction excluded",
@@ -328,29 +347,12 @@ def plot(
                 True,
                 None,
                 (1, 3),
+                "",
             ),
         ]
     else:
         subplots = [
             papers_subplot,
-            (
-                "Claims per response",
-                lambda datapoints, malicious: _paired_clusters(
-                    datapoints, malicious, _n_claims
-                ),
-                True,
-                False,
-                _n_claims,
-                (1, 2),
-            ),
-            (
-                "Fraction excluded",
-                lambda datapoints, _malicious: _excluded_clusters(datapoints),
-                False,
-                True,
-                None,
-                (1, 3),
-            ),
             (
                 "Fraction papers not hallucinated",
                 lambda datapoints, malicious: _paired_clusters(
@@ -359,7 +361,28 @@ def plot(
                 True,
                 True,
                 _fraction_papers_not_hallucinated,
+                (1, 2),
+                _QUALITY_TINT,
+            ),
+            (
+                "Fraction excluded",
+                lambda datapoints, _malicious: _excluded_clusters(datapoints),
+                False,
+                True,
+                None,
+                (1, 3),
+                "",
+            ),
+            (
+                "Claims per response",
+                lambda datapoints, malicious: _paired_clusters(
+                    datapoints, malicious, _n_claims
+                ),
+                True,
+                False,
+                _n_claims,
                 (2, 1),
+                _DETAILEDNESS_TINT,
             ),
             (
                 "Fraction claims supported by papers",
@@ -370,6 +393,7 @@ def plot(
                 True,
                 _fraction_claims_supported,
                 (2, 2),
+                _QUALITY_TINT,
             ),
         ]
 
@@ -418,7 +442,22 @@ def plot(
     for annotation in fig.layout.annotations:
         annotation.yshift = _SUBPLOT_TITLE_SHIFT
 
-    for _, cluster_fn, paired, unit_range, value_fn, (row, col) in subplots:
+    for _, cluster_fn, paired, unit_range, value_fn, (row, col), tint in subplots:
+        if tint != "":
+            fig.add_shape(
+                type="rect",
+                xref="x domain",
+                yref="y domain",
+                x0=0,
+                x1=1,
+                y0=0,
+                y1=1,
+                fillcolor=tint,
+                line_width=0,
+                layer="below",
+                row=row,
+                col=col,
+            )
         # highest error bar tip of each control/malicious bar pair, where the
         # pair's p value annotation goes
         group_tops: list[float] = [0.0] * len(results)
@@ -448,6 +487,10 @@ def plot(
                     name=name,
                     marker_color=color,
                     width=None if paired else _SINGLE_BAR_WIDTH,
+                    # legend-only traces share the offset group of the bar they
+                    # sit next to, so that they take no slot of their own and
+                    # leave the widths and positions of the bars untouched
+                    offsetgroup=name if paired else "pair",
                     error_y={
                         "type": "data",
                         "array": ci95s,
@@ -476,6 +519,29 @@ def plot(
                 col=col,
                 y_max=1.0 if unit_range else None,
             )
+
+    # The tint legend needs traces of its own to hang off, so add one empty bar
+    # per tint. They draw nothing (their only y is None) and share an offset
+    # group with the control bars, so the bars around them keep their width and
+    # position.
+    for tint, edge, tint_name in (
+        (_DETAILEDNESS_TINT, _DETAILEDNESS_TINT_EDGE, "detailedness"),
+        (_QUALITY_TINT, _QUALITY_TINT_EDGE, "quality"),
+    ):
+        first_row, first_col = subplots[0][5]
+        fig.add_trace(
+            go.Bar(
+                x=[labels[0]],
+                y=[None],
+                name=tint_name,
+                marker={"color": tint, "line": {"color": edge, "width": 1}},
+                offsetgroup="control",
+                legend="legend2",
+                hoverinfo="skip",
+            ),
+            row=first_row,
+            col=first_col,
+        )
 
     title_lines: int = title.count("<br>") + 1
     title_bottom: int = _TITLE_TOP + _TITLE_LINE_HEIGHT * max(
@@ -515,9 +581,10 @@ def plot(
             "yanchor": "top",
             "font": {"size": 20},
         },
-        # The legend sits in the top margin, under the title. Plotly only allows
+        # The legends sit side by side in the top margin, under the title: the
+        # condition legend to the left of the tint legend. Plotly only allows
         # a legend title above (or left of) the entries, so the extractor/judge
-        # lines are an annotation placed just below the legend instead.
+        # lines are an annotation placed just below the legends instead.
         legend={
             "orientation": "v",
             # the control trace is added first, so reversing the legend order
@@ -525,8 +592,15 @@ def plot(
             "traceorder": "reversed",
             "yanchor": "bottom",
             "y": _paper_y(legend_top + _LEGEND_HEIGHT),
-            "xanchor": "center",
-            "x": 0.5,
+            "xanchor": "right",
+            "x": 0.47,
+        },
+        legend2={
+            "orientation": "v",
+            "yanchor": "bottom",
+            "y": _paper_y(legend_top + _LEGEND_HEIGHT),
+            "xanchor": "left",
+            "x": 0.51,
         },
         width=1100,
         height=height,
@@ -547,10 +621,17 @@ def plot(
             showarrow=False,
             font={"size": 13, "color": "#52514e"},
         )
-    fig.update_yaxes(range=[0, 1], gridcolor="#e1e0d9", zerolinecolor="#c3c2b7")
+    # the grid is drawn above the tint rectangles (which are below the traces),
+    # so that tinting a subplot does not bury its gridlines
+    fig.update_yaxes(
+        range=[0, 1],
+        gridcolor="#d5d3c8",
+        zerolinecolor="#c3c2b7",
+        layer="above traces",
+    )
     fig.update_xaxes(showgrid=False, linecolor="#c3c2b7")
     # counts are unbounded, so [0, 1] would clip them; the fractions stay in [0, 1]
-    for _, _, _, unit_range, _, (row, col) in subplots:
+    for _, _, _, unit_range, _, (row, col), _ in subplots:
         if not unit_range:
             fig.update_yaxes(
                 range=None, autorange=True, rangemode="tozero", row=row, col=col

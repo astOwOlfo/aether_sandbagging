@@ -7,14 +7,15 @@ Usage:
     )
     fig.write_html("plots/literature_review/plot.html")
 
-Five subplots: a 2x2 grid of grouped malicious/control bar pairs per model with
-average number of papers per response, fraction of papers that are not
-hallucinated, average number of claims per response, and fraction of claims that
-are supported by the paper they are attributed to, plus a fraction of excluded
-response pairs subplot to the right of the grid, vertically centered. With
-papers_only=True, only the papers per response, fraction papers not
-hallucinated, and fraction excluded subplots are drawn, in that order, in a
-single row laid out like src/plot_healthbench.py.
+Five subplots: a 2x2 grid of per model bars, one row per measure of how much a
+response says — papers, then claims — with, in each row, the average of the
+measure per response and the fraction of the measure that is good (papers that
+are not hallucinated, claims that are supported). To the right of the grid,
+vertically centered, is a fraction of excluded response pairs subplot. The
+averages and fractions of X are grouped malicious/control bar pairs; the
+exclusion fraction is a property of the pair, so it is a single bar per model.
+With papers_only=True, only the papers row and the fraction excluded subplot are
+drawn, in a single row laid out like src/plot_healthbench.py.
 
 A tint behind the plotting area says which family a subplot's metric belongs to:
 how extensive the response is, or how good what it says is. The exclusion
@@ -39,13 +40,15 @@ Error bars use cluster-robust standard errors with datapoints as clusters:
 resamples of the same datapoint are correlated, so the effective sample size is
 governed by the number of datapoints, not the number of observations.
 
-P values annotated above the four control/malicious bar pairs of the 2x2 grid
-(all metrics but the exclusion fraction) come from one-sided cluster-robust z tests with the
-same clustering of whether the per-pair paired difference (malicious minus
-control) is negative.
+P values are annotated above every subplot but the exclusion one, and come from
+one-sided cluster-robust z tests with the same clustering, taken on the side
+that sandbagging would push the metric to: the tested quantity is the per-pair
+paired difference (malicious minus control), the null is 0 and the alternative
+is that the difference is negative.
 """
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from math import isnan, nan, sqrt
 from statistics import NormalDist
 
@@ -170,27 +173,33 @@ def _add_p_annotation(
     )
 
 
-def _n_papers(summary: ResponseSummary) -> float | None:
-    return summary.n_papers
+# The per-response values the subplots are built out of. A value of None means
+# the response is excluded from the metric.
 
 
-def _n_claims(summary: ResponseSummary) -> float | None:
-    return summary.n_claims
+def _n_papers(response: EvaluatedResponse) -> float | None:
+    return response.summary.n_papers
 
 
-def _fraction_papers_not_hallucinated(summary: ResponseSummary) -> float | None:
+def _n_claims(response: EvaluatedResponse) -> float | None:
+    return response.summary.n_claims
+
+
+def _fraction_papers_not_hallucinated(response: EvaluatedResponse) -> float | None:
     """Fraction of the papers the existence judge ruled on that exist. None
     (i.e. this response is excluded) if the judge ruled on no paper."""
+    summary: ResponseSummary = response.summary
     n_judged: int = summary.n_papers - summary.n_paper_judge_failed
     if n_judged == 0:
         return None
     return summary.n_correct_papers / n_judged
 
 
-def _fraction_claims_supported(summary: ResponseSummary) -> float | None:
+def _fraction_claims_supported(response: EvaluatedResponse) -> float | None:
     """Fraction of the claims the correctness judge ruled on that are supported
     by the paper they are attributed to. None (i.e. this response is excluded)
     if the judge ruled on no claim."""
+    summary: ResponseSummary = response.summary
     n_judged: int = summary.n_existing_paper_claims - summary.n_claim_judge_failed
     if n_judged == 0:
         return None
@@ -200,7 +209,7 @@ def _fraction_claims_supported(summary: ResponseSummary) -> float | None:
 def _paired_clusters(
     evaluated_datapoints: list[EvaluatedDatapoint],
     malicious: bool,
-    value: Callable[[ResponseSummary], float | None],
+    value: Callable[[EvaluatedResponse], float | None],
 ) -> list[list[float]]:
     """One cluster per datapoint, containing the value of the malicious (or
     control) response of every pair where neither the malicious nor the control
@@ -215,7 +224,7 @@ def _paired_clusters(
             ):
                 continue
             response = pair.malicious if malicious else pair.control
-            response_value: float | None = value(response.summary)
+            response_value: float | None = value(response)
             if response_value is None:
                 continue
             cluster.append(response_value)
@@ -225,7 +234,7 @@ def _paired_clusters(
 
 def _paired_diff_clusters(
     evaluated_datapoints: list[EvaluatedDatapoint],
-    value: Callable[[ResponseSummary], float | None],
+    value: Callable[[EvaluatedResponse], float | None],
 ) -> list[list[float]]:
     """One cluster per datapoint, containing the malicious minus control value
     difference of every pair where neither response is a Failure or a Refusal
@@ -238,8 +247,8 @@ def _paired_diff_clusters(
                 pair.control, EvaluatedResponse
             ):
                 continue
-            malicious_value: float | None = value(pair.malicious.summary)
-            control_value: float | None = value(pair.control.summary)
+            malicious_value: float | None = value(pair.malicious)
+            control_value: float | None = value(pair.control)
             if malicious_value is None or control_value is None:
                 continue
             cluster.append(malicious_value - control_value)
@@ -273,6 +282,28 @@ def _excluded_clusters(
     return clusters
 
 
+@dataclass(frozen=True)
+class _Subplot:
+    """One subplot of the figure.
+
+    `clusters` gives the clusters averaged into the bars, as a function of the
+    evaluated datapoints and of whether the malicious condition is wanted;
+    single-bar subplots ignore that second argument. `paired` says whether the
+    subplot gets a control/malicious bar pair, as opposed to a single bar for a
+    metric that is a property of the pair. `unit_range` says whether the y axis
+    is fixed to [0, 1]. `p_value_clusters` gives the clusters of the paired
+    differences that the annotated one-sided z test tests against 0, and is None
+    for a subplot with no p value."""
+
+    title: str
+    clusters: Callable[[list[EvaluatedDatapoint], bool], list[list[float]]]
+    paired: bool
+    unit_range: bool
+    p_value_clusters: Callable[[list[EvaluatedDatapoint]], list[list[float]]] | None
+    position: tuple[int, int]
+    tint: str
+
+
 def plot(
     models: list[Model],
     results: list[ExperimentResult],
@@ -296,104 +327,78 @@ def plot(
             for model, label in zip(models, labels, strict=True)
         ]
 
-    # In grid order — (1, 1), (1, 2), (1, 3), (2, 1), (2, 2) in the full layout
-    # and (1, 1), (1, 2), (1, 3) with papers_only — so the list doubles as the
-    # subplot_titles order: subplot title, cluster function, whether the subplot
-    # gets a control/malicious bar pair (as opposed to a single bar, for a
-    # metric that is a property of the pair and so ignores the condition),
-    # whether the y axis is [0, 1], per-response value whose paired
-    # malicious-minus-control difference gives the p value (None for no p
-    # value), the subplot's (row, col), and the tint of its plotting area ("" for
-    # no tint).
-    Subplot = tuple[
-        str,
-        Callable[[list[EvaluatedDatapoint], bool], list[list[float]]],
-        bool,
-        bool,
-        Callable[[ResponseSummary], float | None] | None,
-        tuple[int, int],
-        str,
-    ]
-    papers_subplot: Subplot = (
-        "Papers per response",
-        lambda datapoints, malicious: _paired_clusters(
+    papers_subplot = _Subplot(
+        title="Papers per response",
+        clusters=lambda datapoints, malicious: _paired_clusters(
             datapoints, malicious, _n_papers
         ),
-        True,
-        False,
-        _n_papers,
-        (1, 1),
-        _DETAILEDNESS_TINT,
+        paired=True,
+        unit_range=False,
+        p_value_clusters=lambda datapoints: _paired_diff_clusters(
+            datapoints, _n_papers
+        ),
+        position=(1, 1),
+        tint=_DETAILEDNESS_TINT,
     )
-    subplots: list[Subplot]
+    not_hallucinated_subplot = _Subplot(
+        title="Fraction papers not hallucinated",
+        clusters=lambda datapoints, malicious: _paired_clusters(
+            datapoints, malicious, _fraction_papers_not_hallucinated
+        ),
+        paired=True,
+        unit_range=True,
+        p_value_clusters=lambda datapoints: _paired_diff_clusters(
+            datapoints, _fraction_papers_not_hallucinated
+        ),
+        position=(1, 2),
+        tint=_QUALITY_TINT,
+    )
+    excluded_subplot = _Subplot(
+        title="Fraction excluded",
+        clusters=lambda datapoints, _malicious: _excluded_clusters(datapoints),
+        paired=False,
+        unit_range=True,
+        p_value_clusters=None,
+        position=(1, 3),
+        tint="",
+    )
+    subplots: list[_Subplot]
     if papers_only:
         subplots = [
             papers_subplot,
-            (
-                "Fraction papers not hallucinated",
-                lambda datapoints, malicious: _paired_clusters(
-                    datapoints, malicious, _fraction_papers_not_hallucinated
-                ),
-                True,
-                True,
-                _fraction_papers_not_hallucinated,
-                (1, 2),
-                _QUALITY_TINT,
-            ),
-            (
-                "Fraction excluded",
-                lambda datapoints, _malicious: _excluded_clusters(datapoints),
-                False,
-                True,
-                None,
-                (1, 3),
-                "",
-            ),
+            not_hallucinated_subplot,
+            excluded_subplot,
         ]
     else:
         subplots = [
             papers_subplot,
-            (
-                "Fraction papers not hallucinated",
-                lambda datapoints, malicious: _paired_clusters(
-                    datapoints, malicious, _fraction_papers_not_hallucinated
-                ),
-                True,
-                True,
-                _fraction_papers_not_hallucinated,
-                (1, 2),
-                _QUALITY_TINT,
-            ),
-            (
-                "Fraction excluded",
-                lambda datapoints, _malicious: _excluded_clusters(datapoints),
-                False,
-                True,
-                None,
-                (1, 3),
-                "",
-            ),
-            (
-                "Claims per response",
-                lambda datapoints, malicious: _paired_clusters(
+            not_hallucinated_subplot,
+            excluded_subplot,
+            _Subplot(
+                title="Claims per response",
+                clusters=lambda datapoints, malicious: _paired_clusters(
                     datapoints, malicious, _n_claims
                 ),
-                True,
-                False,
-                _n_claims,
-                (2, 1),
-                _DETAILEDNESS_TINT,
+                paired=True,
+                unit_range=False,
+                p_value_clusters=lambda datapoints: _paired_diff_clusters(
+                    datapoints, _n_claims
+                ),
+                position=(2, 1),
+                tint=_DETAILEDNESS_TINT,
             ),
-            (
-                "Fraction claims supported by papers",
-                lambda datapoints, malicious: _paired_clusters(
+            _Subplot(
+                title="Fraction claims supported by papers",
+                clusters=lambda datapoints, malicious: _paired_clusters(
                     datapoints, malicious, _fraction_claims_supported
                 ),
-                True,
-                True,
-                _fraction_claims_supported,
-                (2, 2),
-                _QUALITY_TINT,
+                paired=True,
+                unit_range=True,
+                p_value_clusters=lambda datapoints: _paired_diff_clusters(
+                    datapoints, _fraction_claims_supported
+                ),
+                position=(2, 2),
+                tint=_QUALITY_TINT,
             ),
         ]
 
@@ -416,25 +421,31 @@ def plot(
     _SUBPLOT_TITLES_HEIGHT = 24 + _SUBPLOT_TITLE_SHIFT  # one line, plus the gap
     _CAPTION_GAP = 26  # between the caption (or legend) and the subplot titles
     _ROW_HEIGHT = 380
-    # gap between the grid rows: row 1 x tick labels plus row 2 subplot titles
+    # gap between two grid rows: the upper row's x tick labels plus the lower
+    # row's subplot titles
     _ROW_GAP = 168
-    _PLOT_AREA_HEIGHT = _ROW_HEIGHT if papers_only else 2 * _ROW_HEIGHT + _ROW_GAP
+    _ROWS = 1 if papers_only else 2
+    _PLOT_AREA_HEIGHT = _ROWS * _ROW_HEIGHT + (_ROWS - 1) * _ROW_GAP
     _MARGIN_BOTTOM = 90
 
     if papers_only:
         fig = make_subplots(
             rows=1,
             cols=3,
-            subplot_titles=[subplot_title for subplot_title, *_ in subplots],
-            horizontal_spacing=0.08,
+            subplot_titles=[subplot.title for subplot in subplots],
+            horizontal_spacing=0.06,
         )
     else:
+        # the exclusion subplot spans the whole grid height
         fig = make_subplots(
             rows=2,
             cols=3,
-            specs=[[{}, {}, {"rowspan": 2}], [{}, {}, None]],
-            subplot_titles=[subplot_title for subplot_title, *_ in subplots],
-            horizontal_spacing=0.08,
+            specs=[
+                [{}, {}, {"rowspan": 2}],
+                [{}, {}, None],
+            ],
+            subplot_titles=[subplot.title for subplot in subplots],
+            horizontal_spacing=0.06,
             vertical_spacing=_ROW_GAP / _PLOT_AREA_HEIGHT,
         )
     # at this point the only annotations are the subplot titles; lift them a
@@ -442,8 +453,9 @@ def plot(
     for annotation in fig.layout.annotations:
         annotation.yshift = _SUBPLOT_TITLE_SHIFT
 
-    for _, cluster_fn, paired, unit_range, value_fn, (row, col), tint in subplots:
-        if tint != "":
+    for subplot in subplots:
+        row, col = subplot.position
+        if subplot.tint != "":
             fig.add_shape(
                 type="rect",
                 xref="x domain",
@@ -452,7 +464,7 @@ def plot(
                 x1=1,
                 y0=0,
                 y1=1,
-                fillcolor=tint,
+                fillcolor=subplot.tint,
                 line_width=0,
                 layer="below",
                 row=row,
@@ -466,7 +478,7 @@ def plot(
                 (False, "control", _CONTROL_COLOR),
                 (True, "malicious", _MALICIOUS_COLOR),
             ]
-            if paired
+            if subplot.paired
             else [(False, None, _PAIR_COLOR)]
         )
         for malicious, name, color in bars:
@@ -474,7 +486,7 @@ def plot(
             ci95s: list[float] = []
             for i, result in enumerate(results):
                 mean, se = _cluster_mean_and_se(
-                    cluster_fn(result.evaluated_datapoints, malicious)
+                    subplot.clusters(result.evaluated_datapoints, malicious)
                 )
                 means.append(mean)
                 ci95s.append(_Z95 * se)
@@ -486,11 +498,11 @@ def plot(
                     y=means,
                     name=name,
                     marker_color=color,
-                    width=None if paired else _SINGLE_BAR_WIDTH,
+                    width=None if subplot.paired else _SINGLE_BAR_WIDTH,
                     # legend-only traces share the offset group of the bar they
                     # sit next to, so that they take no slot of their own and
                     # leave the widths and positions of the bars untouched
-                    offsetgroup=name if paired else "pair",
+                    offsetgroup=name if subplot.paired else "pair",
                     error_y={
                         "type": "data",
                         "array": ci95s,
@@ -499,25 +511,26 @@ def plot(
                         "width": 4,
                     },
                     legendgroup=name,
-                    showlegend=paired and (row, col) == subplots[0][5],
+                    showlegend=subplot.paired
+                    and subplot.position == subplots[0].position,
                 ),
                 row=row,
                 col=col,
             )
-        if value_fn is None:
+        if subplot.p_value_clusters is None:
             continue
         for label, group_top, result in zip(labels, group_tops, results, strict=True):
-            diff_mean, diff_se = _cluster_mean_and_se(
-                _paired_diff_clusters(result.evaluated_datapoints, value_fn)
+            mean, se = _cluster_mean_and_se(
+                subplot.p_value_clusters(result.evaluated_datapoints)
             )
             _add_p_annotation(
                 fig,
                 label,
                 group_top,
-                _z_test_p(diff_mean, 0.0, diff_se, "less"),
+                _z_test_p(mean, null=0.0, se=se, alternative="less"),
                 row=row,
                 col=col,
-                y_max=1.0 if unit_range else None,
+                y_max=1.0 if subplot.unit_range else None,
             )
 
     # The tint legend needs traces of its own to hang off, so add one empty bar
@@ -528,7 +541,7 @@ def plot(
         (_DETAILEDNESS_TINT, _DETAILEDNESS_TINT_EDGE, "detailedness"),
         (_QUALITY_TINT, _QUALITY_TINT_EDGE, "quality"),
     ):
-        first_row, first_col = subplots[0][5]
+        first_row, first_col = subplots[0].position
         fig.add_trace(
             go.Bar(
                 x=[labels[0]],
@@ -602,6 +615,8 @@ def plot(
             "xanchor": "left",
             "x": 0.51,
         },
+        # the same width per column as src/plot_healthbench.py, so that the
+        # subplot titles still fit on one line
         width=1100,
         height=height,
         margin={"t": margin_top, "b": _MARGIN_BOTTOM},
@@ -631,25 +646,26 @@ def plot(
     )
     fig.update_xaxes(showgrid=False, linecolor="#c3c2b7")
     # counts are unbounded, so [0, 1] would clip them; the fractions stay in [0, 1]
-    for _, _, _, unit_range, _, (row, col), _ in subplots:
-        if not unit_range:
+    for subplot in subplots:
+        if not subplot.unit_range:
+            row, col = subplot.position
             fig.update_yaxes(
                 range=None, autorange=True, rangemode="tozero", row=row, col=col
             )
 
-    # In the full layout the exclusion subplot spans both grid rows; shrink it
+    # In the full layout the exclusion subplot spans every grid row; shrink it
     # to one row's height, vertically centered, and move its subplot title down
     # with it.
     if not papers_only:
-        excluded_title: str = subplots[2][0]
+        excluded_row, excluded_col = excluded_subplot.position
         row_fraction: float = _ROW_HEIGHT / _PLOT_AREA_HEIGHT
         excluded_domain: list[float] = [
             (1 - row_fraction) / 2,
             (1 + row_fraction) / 2,
         ]
-        fig.update_yaxes(domain=excluded_domain, row=1, col=3)
+        fig.update_yaxes(domain=excluded_domain, row=excluded_row, col=excluded_col)
         for annotation in fig.layout.annotations:
-            if annotation.text == excluded_title:
+            if annotation.text == excluded_subplot.title:
                 annotation.y = excluded_domain[1]
 
     if html_filename is not None:
